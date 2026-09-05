@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}ACEest Fitness & Gym{% endblock %}{% block content %}
+<section class="hero"><p class="eyebrow">FITNESS OPERATIONS / 01</p><h1>Train with<br><em>intention.</em></h1><p class="lede">A focused workspace for coaches to manage clients, programs, workouts, and progress in one place.</p><a class="button" href="{{ url_for('login') }}">Open the dashboard</a></section>
+<section class="section"><div class="section-head"><p class="eyebrow">THE METHOD</p><h2>Programs built for momentum.</h2></div><div class="grid three">{% for name, program in programs.items() %}<article class="card"><span class="number">0{{ loop.index }}</span><h3>{{ name }}</h3><p>{{ program.workout }}. {{ program.nutrition }}</p><strong>{{ program.factor }} kcal / kg</strong></article>{% endfor %}</div></section>
+{% endblock %}
