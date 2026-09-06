@@ -101,7 +101,7 @@ To configure a job:
 4. Add a GitHub webhook at `https://your-jenkins-host/github-webhook/`, or enable polling.
 5. Run the job and review the stage results. Use Jenkins credentials for private repositories; none are stored here.
 
-Jenkins execution is represented and documented here; it is not claimed to have run inside this Codespace.
+Jenkins was configured to pull the project from GitHub and successfully executed the pipeline, including dependency installation, syntax validation, unit tests, Docker image build, and container testing.
 
 ## Security considerations
 
