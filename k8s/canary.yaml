@@ -1,0 +1,210 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aceest-canary-stable
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aceest-canary
+      version: stable
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aceest-canary
+        version: stable
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: aceest
+          image: aceest-fitness:3.2.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          env:
+            - name: APP_VERSION
+              value: "3.2.4"
+            - name: ACEEST_DB_PATH
+              value: /data/aceest_fitness.db
+            - name: SESSION_COOKIE_SECURE
+              value: "false"
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-username
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-password
+            - name: FLASK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: flask-secret-key
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aceest-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aceest-canary-candidate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aceest-canary
+      version: canary
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aceest-canary
+        version: canary
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: aceest
+          image: aceest-fitness:3.2.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          env:
+            - name: APP_VERSION
+              value: "3.2.4"
+            - name: ACEEST_DB_PATH
+              value: /data/aceest_fitness.db
+            - name: SESSION_COOKIE_SECURE
+              value: "false"
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-username
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-password
+            - name: FLASK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: flask-secret-key
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aceest-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aceest-canary
+spec:
+  selector:
+    app.kubernetes.io/name: aceest-canary
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: aceest-canary-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*"
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: aceest-canary
+spec:
+  host: aceest-canary
+  subsets:
+    - name: stable
+      labels:
+        version: stable
+    - name: canary
+      labels:
+        version: canary
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: aceest-canary
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - aceest-canary-gateway
+  http:
+    - route:
+        - destination:
+            host: aceest-canary
+            subset: stable
+          weight: 90
+        - destination:
+            host: aceest-canary
+            subset: canary
+          weight: 10

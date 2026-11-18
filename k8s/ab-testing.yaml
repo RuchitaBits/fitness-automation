@@ -1,0 +1,213 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aceest-ab-a
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aceest-ab
+      version: a
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aceest-ab
+        version: a
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: aceest
+          image: aceest-fitness:3.2.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          env:
+            - name: APP_VERSION
+              value: "3.2.4"
+            - name: ACEEST_DB_PATH
+              value: /data/aceest_fitness.db
+            - name: SESSION_COOKIE_SECURE
+              value: "false"
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-username
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-password
+            - name: FLASK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: flask-secret-key
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aceest-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aceest-ab-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aceest-ab
+      version: b
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aceest-ab
+        version: b
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: aceest
+          image: aceest-fitness:3.2.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          env:
+            - name: APP_VERSION
+              value: "3.2.4"
+            - name: ACEEST_DB_PATH
+              value: /data/aceest_fitness.db
+            - name: SESSION_COOKIE_SECURE
+              value: "false"
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-username
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: admin-password
+            - name: FLASK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aceest-secrets
+                  key: flask-secret-key
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aceest-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aceest-ab-service
+spec:
+  selector:
+    app.kubernetes.io/name: aceest-ab
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: aceest-ab-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*"
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: aceest-ab-service
+spec:
+  host: aceest-ab-service
+  subsets:
+    - name: a
+      labels:
+        version: a
+    - name: b
+      labels:
+        version: b
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: aceest-ab
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - aceest-ab-gateway
+  http:
+    - match:
+        - headers:
+            x-aceest-group:
+              exact: beta
+      route:
+        - destination:
+            host: aceest-ab-service
+            subset: b
+    - route:
+        - destination:
+            host: aceest-ab-service
+            subset: a
