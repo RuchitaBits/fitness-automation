@@ -9,7 +9,11 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE = Path(os.environ.get("DATABASE_PATH", BASE_DIR / "instance" / "aceest.db"))
+DATABASE = Path(
+    os.environ.get("DATABASE_PATH")
+    or os.environ.get("ACEEST_DB_PATH")
+    or BASE_DIR / "instance" / "aceest.db"
+)
 
 PROGRAMS = {
     "Fat Loss": {"factor": 22, "workout": "Strength and conditioning", "nutrition": "Protein-rich meals with a measured calorie deficit."},
@@ -23,24 +27,60 @@ EXERCISES = {
 }
 
 
+def _as_bool(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_app_version():
+    version = os.environ.get("APP_VERSION")
+    version_file = BASE_DIR / "VERSION"
+    if version:
+        return version
+    return version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
+
+
 def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get("SECRET_KEY", "dev-only-change-me"),
-        DATABASE=str(DATABASE),
+        SECRET_KEY=os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY"),
+        DATABASE=str(
+            os.environ.get("DATABASE_PATH")
+            or os.environ.get("ACEEST_DB_PATH")
+            or DATABASE
+        ),
+        DEMO_USERNAME=os.environ.get("DEMO_USERNAME") or os.environ.get("ADMIN_USERNAME"),
+        DEMO_PASSWORD=os.environ.get("DEMO_PASSWORD") or os.environ.get("ADMIN_PASSWORD"),
+        APP_VERSION=os.environ.get("APP_VERSION") or get_app_version(),
+        SHADOW_MODE=_as_bool(os.environ.get("SHADOW_MODE")),
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=_as_bool(os.environ.get("SESSION_COOKIE_SECURE")),
     )
     if test_config:
         app.config.update(test_config)
     Path(app.config["DATABASE"]).parent.mkdir(parents=True, exist_ok=True)
-
-    with app.app_context():
-        init_db()
 
     @app.teardown_appcontext
     def close_db(_error=None):
         db = g.pop("db", None)
         if db is not None:
             db.close()
+
+    @app.before_request
+    def ignore_shadow_writes():
+        if app.config["SHADOW_MODE"] and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            app.logger.info("Ignored state-changing request received by shadow deployment")
+            return jsonify(status="shadow request ignored"), 202
+        return None
+
+    @app.after_request
+    def add_version_header(response):
+        if app.config["APP_VERSION"]:
+            response.headers["X-Application-Version"] = app.config["APP_VERSION"]
+        return response
+
+    with app.app_context():
+        init_db(app.config["DEMO_USERNAME"], app.config["DEMO_PASSWORD"])
 
     @app.route("/")
     def index():
@@ -53,6 +93,13 @@ def create_app(test_config=None):
     @app.route("/login", methods=("GET", "POST"))
     def login():
         if request.method == "POST":
+            if not all(
+                app.config.get(key)
+                for key in ("SECRET_KEY", "DEMO_USERNAME", "DEMO_PASSWORD")
+            ):
+                return render_template(
+                    "error.html", message="Authentication is not configured."
+                ), 503
             username = request.form.get("username", "").strip()
             user = query_db("SELECT * FROM users WHERE username = ?", (username,), one=True)
             if user and check_password_hash(user["password_hash"], request.form.get("password", "")):
@@ -219,7 +266,7 @@ def execute_db(query, args=()):
     return cursor.lastrowid
 
 
-def init_db():
+def init_db(username=None, password=None):
     db = get_db()
     db.executescript("""
         CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL);
@@ -229,12 +276,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS exercises (id INTEGER PRIMARY KEY AUTOINCREMENT, workout_id INTEGER NOT NULL REFERENCES workouts(id) ON DELETE CASCADE, name TEXT NOT NULL, sets INTEGER, reps INTEGER, weight REAL);
         CREATE TABLE IF NOT EXISTS metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE, metric_date TEXT NOT NULL, weight REAL, waist REAL, body_fat REAL);
     """)
-    username = os.environ.get("DEMO_USERNAME", "admin")
-    password_hash = generate_password_hash(os.environ.get("DEMO_PASSWORD", "admin"))
-    db.execute(
-        "INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, ?)",
-        (username, password_hash),
-    )
+    if username and password:
+        password_hash = generate_password_hash(password)
+        db.execute(
+            "INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, ?)",
+            (username, password_hash),
+        )
     db.commit()
 
 
