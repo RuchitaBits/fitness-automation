@@ -11,6 +11,28 @@ def test_home_and_health(client):
     assert response.headers["X-Application-Version"] == "test-version"
 
 
+def test_login_page_does_not_show_default_credentials(client):
+    response = client.get("/login")
+
+    assert response.status_code == 200
+    assert b"admin" not in response.data.lower()
+
+
+def test_health_checks_database_connection(client, monkeypatch):
+    executed_queries = []
+
+    def fake_query_db(query, args=(), one=False):
+        executed_queries.append((query, args, one))
+        return (1,)
+
+    monkeypatch.setattr("app.query_db", fake_query_db)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert executed_queries == [("SELECT 1", (), True)]
+
+
 def test_login_success_and_failure(client):
     assert client.post("/login", data={"username": "bad", "password": "bad"}).status_code == 200
     response = client.post(
@@ -62,6 +84,8 @@ def test_login_fails_closed_without_authentication_configuration(tmp_path, monke
     response = app.test_client().post("/login", data={})
 
     assert response.status_code == 503
+    assert b"503" in response.data
+    assert b"404" not in response.data
 
 
 def test_devops_environment_names_configure_the_existing_application(tmp_path, monkeypatch):

@@ -118,9 +118,13 @@ def test_rolling_update_and_persistent_storage_are_configured():
         "maxUnavailable": 0,
         "maxSurge": 1,
     }
+    assert deployment["spec"]["revisionHistoryLimit"] > 0
     assert all(labels[key] == value for key, value in selector.items())
     assert any(volume.get("persistentVolumeClaim", {}).get("claimName") == "aceest-data" for volume in pod_spec["volumes"])
-    assert deployment["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]
+    container = pod_spec["containers"][0]
+    assert container["startupProbe"]["httpGet"]["path"] == "/health"
+    assert container["readinessProbe"]["httpGet"]["path"] == "/health"
+    assert container["livenessProbe"]["httpGet"]["path"] == "/health"
 
 
 def test_deployments_use_a_real_image_tag_and_secret_references():

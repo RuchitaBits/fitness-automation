@@ -1,1 +1,1 @@
-{% extends "base.html" %}{% block title %}Not found | ACEest{% endblock %}{% block content %}<section class="auth"><p class="eyebrow">404</p><h1>{{ message }}</h1><a class="button" href="{{ url_for('index') }}">Return home</a></section>{% endblock %}
+{% extends "base.html" %}{% block title %}Error | ACEest{% endblock %}{% block content %}<section class="auth"><p class="eyebrow">{{ error_code|default(404) }}</p><h1>{{ message }}</h1><a class="button" href="{{ url_for('index') }}">Return home</a></section>{% endblock %}

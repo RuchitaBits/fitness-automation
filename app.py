@@ -88,6 +88,7 @@ def create_app(test_config=None):
 
     @app.route("/health")
     def health():
+        query_db("SELECT 1", one=True)
         return jsonify(status="healthy")
 
     @app.route("/login", methods=("GET", "POST"))
@@ -98,7 +99,9 @@ def create_app(test_config=None):
                 for key in ("SECRET_KEY", "DEMO_USERNAME", "DEMO_PASSWORD")
             ):
                 return render_template(
-                    "error.html", message="Authentication is not configured."
+                    "error.html",
+                    message="Authentication is not configured.",
+                    error_code=503,
                 ), 503
             username = request.form.get("username", "").strip()
             user = query_db("SELECT * FROM users WHERE username = ?", (username,), one=True)
@@ -148,7 +151,9 @@ def create_app(test_config=None):
     def client_detail(client_id):
         client = query_db("SELECT * FROM clients WHERE id = ?", (client_id,), one=True)
         if client is None:
-            return render_template("error.html", message="Client not found."), 404
+            return render_template(
+                "error.html", message="Client not found.", error_code=404
+            ), 404
         progress = query_db("SELECT * FROM progress WHERE client_id = ? ORDER BY week_date DESC", (client_id,))
         metrics = query_db("SELECT * FROM metrics WHERE client_id = ? ORDER BY metric_date DESC", (client_id,))
         return render_template("client_detail.html", client=client, progress=progress, metrics=metrics)

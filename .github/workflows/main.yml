@@ -23,6 +23,7 @@ jobs:
         run: python -m pytest -q
 
   docker-build:
+    needs: build-and-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
