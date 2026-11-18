@@ -1,127 +1,155 @@
 # ACEest Fitness & Gym
 
-ACEest Fitness & Gym is a small Flask web application for the DevOps Assignment 1. It provides a coach workspace for client management, training programs, workout logging, membership status, and weekly adherence tracking. The project demonstrates a quality-gated delivery path using Python, Pytest, Docker, Jenkins, and GitHub Actions.
+ACEest Fitness & Gym is a Flask web application for fitness staff to manage clients, training programs, workouts, memberships, and progress. Assignment 2 adds automated validation, code-quality analysis, container packaging, and Kubernetes deployment configuration while retaining the Assignment 1 application, templates, styles, and workflows.
 
-## Assignment objective
+## Application features
 
-The application converts the supplied fitness-management concepts into a maintainable browser-based Flask service. SQLite keeps local development portable, deterministic rules power the program generator, and every important workflow is accessible through Flask's test client.
-
-## Technology stack
-
-- Python 3.12 and Flask 3.1
-- SQLite with a local database created automatically at first run
-- Pytest and Ruff for testing and quality checks
-- Docker with Gunicorn for the runtime image
-- Declarative Jenkins Pipeline and GitHub Actions
-
-## Features
-
-- Staff login with a hashed demonstration password (`admin` / `admin`)
+- Staff login with credentials supplied through environment variables
 - Dashboard with client, membership, program, and workout summaries
 - Client create, view, update, and delete operations
 - Fat Loss, Muscle Gain, and Beginner programs with calorie factors 22, 35, and 26
-- Rule-based weekly program generation for beginner, intermediate, and advanced levels
-- Workout logging for Strength, Hypertrophy, Cardio, and Mobility
-- Weekly adherence records and membership end dates
-- JSON health endpoint at `/health`
+- Rule-based program generation for beginner, intermediate, and advanced levels
+- Workout logging and weekly adherence records
+- Membership end dates and JSON health endpoint at `/health`
 
-## Architecture and structure
+The application factory and SQLite data access are in `app.py`. Browser views are in `templates/`, styles are in `static/`, and tests use temporary databases.
 
-`app.py` contains the application factory, routes, SQLite schema initialization, and domain helpers such as `calculate_calories`. Templates provide the web views, while the test fixture creates a fresh database for every test.
+## Technology
 
-```text
-.
-├── app.py
-├── requirements.txt
-├── Dockerfile
-├── Jenkinsfile
-├── pytest.ini
-├── .github/workflows/main.yml
-├── templates/
-├── static/css/style.css
-├── tests/
-└── instance/                   # Runtime SQLite data, ignored by Git
-```
+- Python 3.12, Flask, SQLite, and Gunicorn
+- Pytest, pytest-cov, Ruff, and PyYAML
+- Docker
+- Jenkins and GitHub Actions
+- SonarQube
+- Kubernetes and Minikube
+- PowerShell helper scripts
 
 ## Local setup
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+Run these commands from the repository directory:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+
+$env:DEMO_USERNAME = Read-Host "Choose a local administrator username"
+$localPassword = Read-Host "Choose a local administrator password" -AsSecureString
+$env:DEMO_PASSWORD = [System.Net.NetworkCredential]::new("", $localPassword).Password
+$env:SECRET_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
 python app.py
 ```
 
-Open <http://127.0.0.1:5000>. The database initializes automatically. The demonstration login is `admin` / `admin`; set `DEMO_USERNAME`, `DEMO_PASSWORD`, and `SECRET_KEY` environment variables for a different local configuration. These defaults are for assessment demonstration only.
+Open `http://127.0.0.1:5000/`. Do not commit environment files or credentials. `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `FLASK_SECRET_KEY` are also accepted for container and Kubernetes configuration.
 
-## Tests and quality checks
+## Tests and coverage
 
-```bash
-python -m compileall -q .
+```powershell
+python -m compileall -q app.py tests
 python -m ruff check app.py tests
 python -m pytest -q
+python -m pytest -q --cov=app --cov-report=xml:coverage.xml --cov-report=html:coverage_html --cov-report=term-missing
 ```
 
-The suite covers startup, health, authentication, database initialization, client CRUD, invalid input, calorie calculation, program generation, workouts, and progress validation. A normal virtual environment also supports the requested `pytest -q` command.
+On Windows, `.\scripts\run-local-tests.ps1` runs the coverage command. Generated coverage, cache, database, and temporary files are excluded from Git.
 
 ## Docker
 
-```bash
-docker build -t aceest-fitness-devops .
-docker run --rm -p 5000:5000 aceest-fitness-devops
-curl http://127.0.0.1:5000/health
-# {"status":"healthy"}
+Build the runtime image:
+
+```powershell
+docker build --target runtime --build-arg APP_VERSION=3.2.4 -t aceest-fitness:3.2.4 .
 ```
 
-The service listens on `0.0.0.0:5000`. The image contains the test suite so CI can run `python -m pytest -q` inside the container. Runtime databases are not committed.
+Provide credentials from the current shell when running the container:
+
+```powershell
+docker run --rm -p 5000:5000 `
+  --env DEMO_USERNAME `
+  --env DEMO_PASSWORD `
+  --env SECRET_KEY `
+  aceest-fitness:3.2.4
+```
+
+The runtime image runs Gunicorn as a non-root user, stores SQLite data under `/data`, and exposes `/health`. To run the test stage:
+
+```powershell
+docker build --target test -t aceest-fitness:test .
+docker run --rm aceest-fitness:test
+```
 
 ## GitHub Actions
 
-`.github/workflows/main.yml` runs for every push and pull request:
+The workflow in `.github/workflows/main.yml` installs development dependencies, compiles and lints the Python code, runs tests, builds the runtime and test images, runs the test image, and checks the runtime health endpoint. It runs on pushes and pull requests.
 
-1. **Build and lint** checks out source, installs dependencies, compiles Python, runs Ruff, and runs Pytest.
-2. **Docker image assembly** builds the tagged application image.
-3. **Container tests** builds a test image, runs Pytest inside it, and starts the service to verify `/health`.
+## Jenkins and SonarQube
+
+`Jenkinsfile` runs syntax and lint checks, Pytest, coverage, SonarQube analysis and Quality Gate validation, Docker image build/publishing, and optional Kubernetes deployment and verification.
+
+Configure Jenkins with:
+
+- A Linux agent labeled `linux-docker` with Python, Docker, Git, and `kubectl`
+- A SonarQube server configured with the name `sonarqube`
+- A Docker Hub username/password credential with ID `dockerhub-creds`
+- A kubeconfig secret-file credential with ID `kubeconfig` when deployment is enabled
+
+Set `IMAGE_REPO` to the Docker Hub namespace and repository. Image publishing and Kubernetes deployment are opt-in pipeline parameters. Store credentials in Jenkins or the cluster, not in this repository.
+
+For a local SonarQube scan, generate coverage first, then run:
+
+```powershell
+sonar-scanner -Dproject.settings=sonar-project.properties
+```
+
+## Kubernetes
+
+The primary rolling deployment uses `k8s/rolling-update.yaml` and the persistent volume claim in `k8s/pvc.yaml`. Create the `aceest-secrets` Kubernetes Secret with keys `admin-username`, `admin-password`, and `flask-secret-key` using your cluster's approved secret-handling process. Do not add Secret manifests or credential values to Git.
+
+Build and load the image into Minikube, then apply the rolling resources:
+
+```powershell
+minikube start
+docker build --target runtime --build-arg APP_VERSION=3.2.4 -t aceest-fitness:3.2.4 .
+minikube image load aceest-fitness:3.2.4
+kubectl apply -f k8s/pvc.yaml
+kubectl apply -f k8s/rolling-update.yaml
+kubectl rollout status deployment/aceest-rolling --timeout=180s
+kubectl port-forward service/aceest-rolling-service 18080:80
+```
+
+In another terminal, check `http://127.0.0.1:18080/health`. The rolling Service is ClusterIP. `k8s/service.yaml` belongs to the separate blue-green setup and should not be applied for the rolling deployment.
+
+The sample manifests use non-secure session cookies for local HTTP demonstrations. For a production deployment behind TLS, set `SESSION_COOKIE_SECURE=true` through the deployment configuration.
+
+Update the rolling deployment and roll it back with:
+
+```powershell
+kubectl set image deployment/aceest-rolling aceest=aceest-fitness:3.2.5
+kubectl set env deployment/aceest-rolling APP_VERSION=3.2.5
+kubectl rollout status deployment/aceest-rolling --timeout=180s
+kubectl rollout history deployment/aceest-rolling
+kubectl rollout undo deployment/aceest-rolling
+kubectl rollout status deployment/aceest-rolling --timeout=180s
+```
+
+The blue-green, canary, shadow, and A/B resources are separate examples. Canary, shadow, and A/B traffic routing require Istio or a compatible service mesh. Read the notes under `deployment-strategies/` and apply only the resources needed for a specific strategy. PowerShell helpers are in `scripts/`.
+
+## Repository layout
 
 ```text
-Developer -> Git commit -> GitHub push / pull request -> Actions
--> Build & Lint -> Pytest -> Docker build -> Containerized tests
--> Jenkins secondary quality validation
+app.py                       Flask application and SQLite access
+templates/ and static/       Assignment 1 browser interface
+tests/                       Application and Kubernetes manifest tests
+k8s/                         Kubernetes manifests
+deployment-strategies/       Deployment strategy notes
+scripts/                     PowerShell deployment and test helpers
+reports/                     Assignment 2 report
+Dockerfile                   Test and non-root runtime image stages
+Jenkinsfile                  Jenkins CI/CD pipeline
+sonar-project.properties     SonarQube and coverage settings
 ```
 
-## Jenkins
+## External validation
 
-`Jenkinsfile` is a declarative pipeline with Checkout, dependency installation, syntax check, unit tests, Docker build, and container test stages. Any failed stage stops the build. Jenkins requires a node with Python, pip, and Docker access.
-
-To configure a job:
-
-1. Create a Pipeline job in Jenkins.
-2. Select **Pipeline script from SCM**, choose Git, and enter the GitHub repository URL.
-3. Select the branch, such as `*/main`, and use script path `Jenkinsfile`.
-4. Add a GitHub webhook at `https://your-jenkins-host/github-webhook/`, or enable polling.
-5. Run the job and review the stage results. Use Jenkins credentials for private repositories; none are stored here.
-
-Jenkins was configured to pull the project from GitHub and successfully executed the pipeline, including dependency installation, syntax validation, unit tests, Docker image build, and container testing.
-
-## Security considerations
-
-The demo account exists only for evaluation. Passwords are hashed, but a real deployment should use a secret manager, rotate `SECRET_KEY`, replace the demo account, use HTTPS, and add stronger authorization and CSRF protection. Do not commit `.env` files, database files, credentials, tokens, or personal client information.
-
-## Troubleshooting
-
-- If port 5000 is occupied, use another host port such as `-p 5050:5000`.
-- Remove `instance/aceest.db` to reset the local database.
-- If bare `pytest` uses a system environment, activate the project virtual environment or use `python -m pytest -q`.
-- Docker must be installed and its daemon available for image and Jenkins stages.
-
-## Conclusion
-
-This repository provides a focused, testable Flask fitness application and reproducible CI/CD demonstration. The gates catch syntax, lint, unit-test, image-build, and container-startup regressions before delivery.
-
-## First meaningful commit and push
-
-```bash
-git add .
-git commit -m "Build ACEest Fitness CI/CD assignment"
-git push origin main
-```
+Docker, Kubernetes/Minikube, Jenkins, SonarQube, and Docker Hub require their respective local services, agents, credentials, or accounts. Their build, scan, deployment, and publishing results must be captured in those environments; this repository does not claim those external steps ran without evidence.
