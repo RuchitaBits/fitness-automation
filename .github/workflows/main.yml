@@ -13,7 +13,8 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: python -m pip install -r requirements.txt
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt
       - name: Syntax validation
         run: python -m compileall -q .
       - name: Ruff quality check
@@ -26,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build --tag aceest-fitness-devops:${{ github.sha }} .
+        run: docker build --target runtime --tag aceest-fitness-devops:${{ github.sha }} .
 
   container-tests:
     runs-on: ubuntu-latest
@@ -34,11 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build test image
-        run: docker build --tag aceest-fitness-devops:test .
+        run: docker build --target test --tag aceest-fitness-devops:test .
       - name: Run pytest inside container
         run: docker run --rm aceest-fitness-devops:test python -m pytest -q
+      - name: Build runtime image
+        run: docker build --target runtime --tag aceest-fitness-devops:runtime .
       - name: Verify health endpoint
         run: |
-          docker run --detach --name aceest-app -p 5000:5000 aceest-fitness-devops:test
+          docker run --detach --name aceest-app -p 5000:5000 aceest-fitness-devops:runtime
           curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:5000/health
-          docker rm --force aceest-app
+      - name: Remove health-check container
+        if: always()
+        run: docker rm --force aceest-app || true
