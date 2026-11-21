@@ -85,16 +85,28 @@ The workflow in `.github/workflows/main.yml` installs development dependencies, 
 
 ## Jenkins and SonarQube
 
-`Jenkinsfile` runs syntax and lint checks, Pytest, coverage, SonarQube analysis and Quality Gate validation, Docker image build/publishing, and optional Kubernetes deployment and verification.
+`Jenkinsfile` runs these stages in order:
+
+1. Checkout and select `IMAGE_VERSION` or the repository `VERSION`.
+2. Set up Python and install `requirements-dev.txt`.
+3. Compile Python and run Ruff.
+4. Run Pytest and publish JUnit results.
+5. Generate XML/HTML coverage reports.
+6. Run SonarQube analysis and wait for the Quality Gate.
+7. Build the versioned runtime image and the isolated test image; run the container tests.
+8. Optionally authenticate to Docker Hub, tag the image with version and commit SHA, and push both tags.
+9. Optionally deploy the pushed image to Kubernetes, roll back on a failed rollout, and verify deployment status and Service.
 
 Configure Jenkins with:
 
-- A Linux agent labeled `linux-docker` with Python, Docker, Git, and `kubectl`
-- A SonarQube server configured with the name `sonarqube`
-- A Docker Hub username/password credential with ID `dockerhub-creds`
-- A kubeconfig secret-file credential with ID `kubeconfig` when deployment is enabled
+- A Multibranch Pipeline or Pipeline-from-SCM job pointing at this repository and `Jenkinsfile`.
+- An agent labelled `linux-docker` with Python 3 (including `venv`/`pip`), Git, Docker CLI with daemon access, `sonar-scanner` on `PATH`, and `kubectl` when deployment is enabled.
+- The Jenkins Git, Pipeline/Declarative Pipeline, SonarQube Scanner, Credentials Binding, and JUnit plugins. Docker Pipeline is not used; the Jenkinsfile invokes the Docker CLI.
+- A SonarQube server configured with the name `sonarqube`, and a SonarQube webhook to `<JENKINS_URL>/sonarqube-webhook/` for Quality Gate callbacks.
+- A Docker Hub **Username with password** credential with ID `dockerhub-creds`.
+- A Kubernetes kubeconfig **Secret file** credential with ID `kubeconfig` when deployment is enabled.
 
-Set `IMAGE_REPO` to the Docker Hub namespace and repository. Image publishing and Kubernetes deployment are opt-in pipeline parameters. Store credentials in Jenkins or the cluster, not in this repository.
+Set `IMAGE_REPO` to the Docker Hub namespace/repository to publish. `PUBLISH_IMAGE` and `DEPLOY_TO_K8S` default to false; deployment requires publishing to be enabled. Store credentials in Jenkins or the cluster, not in this repository.
 
 For a local SonarQube scan, generate coverage first, then run:
 

@@ -45,7 +45,19 @@ The Flask app serves its browser interface from `templates/` and `static/`, uses
 
 GitHub Actions runs syntax validation, Ruff, Pytest, runtime image build, container tests, and a runtime health check. Docker jobs depend on the lint/test job so packaging is gated on those checks.
 
-The Jenkins pipeline checks out the selected branch, creates an isolated Python environment, runs syntax/lint/tests and coverage, invokes SonarQube analysis and the Quality Gate, builds the runtime and test images, and optionally publishes and deploys. Publishing requires the `dockerhub-creds` Jenkins credential and an `IMAGE_REPO` parameter. Kubernetes deployment is opt-in, uses the `kubeconfig` credential, and attempts a rollout undo if an update fails after deployment starts.
+The existing Jenkinsfile contains the following ordered stages:
+
+1. Checkout; choose the supplied `IMAGE_VERSION` or `VERSION`, and record the commit SHA.
+2. Set up Python and install `requirements-dev.txt`.
+3. Compile the app/tests and run Ruff.
+4. Run Pytest and write JUnit results.
+5. Generate XML/HTML coverage.
+6. Run SonarQube analysis and wait for the Quality Gate.
+7. Build the versioned runtime image and test image; run container tests.
+8. When `PUBLISH_IMAGE=true`, use Jenkins credential `dockerhub-creds` to authenticate, tag by version and commit SHA, and push both tags to `IMAGE_REPO`.
+9. When `DEPLOY_TO_K8S=true`, require publishing, use Jenkins credential `kubeconfig`, deploy the pushed image, roll back if the update fails, and verify rollout and Service status.
+
+The Jenkins agent must be labelled `linux-docker` and provide Python 3 with `venv`/`pip`, Git, Docker CLI/daemon access, `sonar-scanner` on `PATH`, and `kubectl` when deployment is enabled. Configure the SonarQube server as `sonarqube`, install the SonarQube Scanner, Credentials Binding, Pipeline, Git, and JUnit plugins, and configure the SonarQube webhook to `<JENKINS_URL>/sonarqube-webhook/`. Docker Pipeline is not required because the Jenkinsfile uses the Docker CLI. External Jenkins/plugin/credential configuration and execution remain unverified in this environment.
 
 **Jenkins was not available for execution during this audit.** Configure the `linux-docker` agent, SonarQube server name, Jenkins plugins, and required credentials before running the pipeline.
 

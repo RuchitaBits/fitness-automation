@@ -47,7 +47,7 @@ pipeline {
             }
         }
 
-        stage('Syntax validation') {
+        stage('Syntax and lint validation') {
             steps {
                 sh '''
                     set -eu
@@ -137,7 +137,7 @@ pipeline {
             }
         }
 
-        stage('Docker image push') {
+        stage('Docker image tagging and publishing') {
             when { expression { params.PUBLISH_IMAGE } }
             steps {
                 sh '''
