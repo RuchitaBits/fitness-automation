@@ -15,6 +15,8 @@ FROM dependencies AS test
 COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY tests ./tests
+COPY k8s ./k8s
+COPY kubernetes ./kubernetes
 CMD ["python", "-m", "pytest", "-q"]
 
 FROM dependencies AS runtime
