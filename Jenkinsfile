@@ -1,5 +1,5 @@
 pipeline {
-    agent { label 'linux-docker' }
+    agent any
 
     options {
         timestamps()
@@ -26,55 +26,65 @@ pipeline {
                     env.APP_VERSION = params.IMAGE_VERSION.trim()
                         ? params.IMAGE_VERSION.trim()
                         : readFile('VERSION').trim()
-                    env.GIT_SHORT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim()
+                    env.GIT_SHORT_SHA = bat(
+                        script: '@git rev-parse --short=12 HEAD',
+                        returnStdout: true
+                    ).trim()
                 }
             }
         }
 
         stage('Set up Python environment') {
             steps {
-                sh 'python3 -m venv .venv'
+                bat '''
+                    @echo off
+                    python -m venv .venv
+                    if errorlevel 1 exit /b %errorlevel%
+                '''
             }
         }
 
         stage('Install dependencies') {
             steps {
-                sh '''
-                    set -eu
-                    .venv/bin/python -m pip install --upgrade pip
-                    .venv/bin/python -m pip install -r requirements-dev.txt
+                bat '''
+                    @echo off
+                    .venv\\Scripts\\python.exe -m pip install --upgrade pip
+                    if errorlevel 1 exit /b %errorlevel%
+                    .venv\\Scripts\\python.exe -m pip install -r requirements-dev.txt
+                    if errorlevel 1 exit /b %errorlevel%
                 '''
             }
         }
 
         stage('Syntax and lint validation') {
             steps {
-                sh '''
-                    set -eu
-                    .venv/bin/python -m compileall -q app.py tests
-                    .venv/bin/python -m ruff check app.py tests
+                bat '''
+                    @echo off
+                    .venv\\Scripts\\python.exe -m compileall -q app.py tests
+                    if errorlevel 1 exit /b %errorlevel%
+                    .venv\\Scripts\\python.exe -m ruff check app.py tests
+                    if errorlevel 1 exit /b %errorlevel%
                 '''
             }
         }
 
         stage('Automated testing using Pytest') {
             steps {
-                sh '''
-                    set -eu
-                    mkdir -p reports
-                    .venv/bin/python -m pytest -q --junitxml=reports/pytest-results.xml
+                bat '''
+                    @echo off
+                    if not exist reports mkdir reports
+                    .venv\\Scripts\\python.exe -m pytest -q --junitxml=reports/pytest-results.xml
+                    if errorlevel 1 exit /b %errorlevel%
                 '''
             }
         }
 
         stage('Generate test coverage report') {
             steps {
-                sh '''
-                    set -eu
-                    .venv/bin/python -m pytest -q --cov=app \
-                        --cov-report=xml:coverage.xml \
-                        --cov-report=html:coverage_html \
-                        --cov-report=term-missing
+                bat '''
+                    @echo off
+                    .venv\\Scripts\\python.exe -m pytest -q --cov=app --cov-report=xml:coverage.xml --cov-report=html:coverage_html --cov-report=term-missing
+                    if errorlevel 1 exit /b %errorlevel%
                 '''
             }
         }
@@ -82,7 +92,11 @@ pipeline {
         stage('SonarQube analysis') {
             steps {
                 withSonarQubeEnv('sonarqube') {
-                    sh 'sonar-scanner -Dproject.settings=sonar-project.properties'
+                    bat '''
+                        @echo off
+                        sonar-scanner -Dproject.settings=sonar-project.properties
+                        if errorlevel 1 exit /b %errorlevel%
+                    '''
                 }
             }
         }
@@ -100,20 +114,22 @@ pipeline {
                 script {
                     env.LOCAL_IMAGE = "aceest-fitness:${env.APP_VERSION}"
                 }
-                sh '''
-                    set -eu
-                    docker build --target runtime --build-arg APP_VERSION="$APP_VERSION" \
-                        --tag "$LOCAL_IMAGE" --tag "aceest-fitness:$GIT_SHORT_SHA" .
+                bat '''
+                    @echo off
+                    docker build --target runtime --build-arg APP_VERSION="%APP_VERSION%" --tag "%LOCAL_IMAGE%" --tag "aceest-fitness:%GIT_SHORT_SHA%" .
+                    if errorlevel 1 exit /b %errorlevel%
                 '''
             }
         }
 
         stage('Docker test image') {
             steps {
-                sh '''
-                    set -eu
-                    docker build --target test --tag "aceest-fitness:test-$GIT_SHORT_SHA" .
-                    docker run --rm "aceest-fitness:test-$GIT_SHORT_SHA"
+                bat '''
+                    @echo off
+                    docker build --target test --tag "aceest-fitness:test-%GIT_SHORT_SHA%" .
+                    if errorlevel 1 exit /b %errorlevel%
+                    docker run --rm "aceest-fitness:test-%GIT_SHORT_SHA%"
+                    if errorlevel 1 exit /b %errorlevel%
                 '''
             }
         }
@@ -132,7 +148,10 @@ pipeline {
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
-                    sh 'set +x; printf "%s" "$DOCKER_PASS" | docker login --username "$DOCKER_USER" --password-stdin'
+                    powershell '''
+                        $env:DOCKER_PASS | docker login --username $env:DOCKER_USER --password-stdin
+                        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                    '''
                 }
             }
         }
@@ -140,12 +159,16 @@ pipeline {
         stage('Docker image tagging and publishing') {
             when { expression { params.PUBLISH_IMAGE } }
             steps {
-                sh '''
-                    set -eu
-                    docker tag "$LOCAL_IMAGE" "$IMAGE_REPO:$APP_VERSION"
-                    docker tag "$LOCAL_IMAGE" "$IMAGE_REPO:$GIT_SHORT_SHA"
-                    docker push "$IMAGE_REPO:$APP_VERSION"
-                    docker push "$IMAGE_REPO:$GIT_SHORT_SHA"
+                bat '''
+                    @echo off
+                    docker tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%APP_VERSION%"
+                    if errorlevel 1 exit /b %errorlevel%
+                    docker tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%GIT_SHORT_SHA%"
+                    if errorlevel 1 exit /b %errorlevel%
+                    docker push "%IMAGE_REPO%:%APP_VERSION%"
+                    if errorlevel 1 exit /b %errorlevel%
+                    docker push "%IMAGE_REPO%:%GIT_SHORT_SHA%"
+                    if errorlevel 1 exit /b %errorlevel%
                 '''
             }
         }
@@ -159,24 +182,38 @@ pipeline {
                     }
                 }
                 withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                    sh '''
-                        set -eu
-                        DEPLOY_STARTED=0
-                        rollback_on_failure() {
-                            status=$?
-                            if [ "$status" -ne 0 ] && [ "$DEPLOY_STARTED" -eq 1 ]; then
-                                kubectl rollout undo deployment/aceest-rolling || true
-                                kubectl rollout status deployment/aceest-rolling --timeout=180s || true
-                            fi
-                            exit "$status"
+                    powershell '''
+                        $ErrorActionPreference = 'Stop'
+                        $deploymentStarted = $false
+
+                        function Invoke-Kubectl {
+                            & kubectl @args
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "kubectl $($args -join ' ') failed with exit code $LASTEXITCODE"
+                            }
                         }
-                        trap rollback_on_failure EXIT
-                        kubectl apply -f k8s/pvc.yaml
-                        kubectl apply -f k8s/rolling-update.yaml
-                        DEPLOY_STARTED=1
-                        kubectl set image deployment/aceest-rolling aceest="$IMAGE_REPO:$APP_VERSION"
-                        kubectl set env deployment/aceest-rolling APP_VERSION="$APP_VERSION"
-                        kubectl rollout status deployment/aceest-rolling --timeout=180s
+
+                        try {
+                            Invoke-Kubectl apply -f k8s/pvc.yaml
+                            Invoke-Kubectl apply -f k8s/rolling-update.yaml
+                            $deploymentStarted = $true
+                            Invoke-Kubectl set image deployment/aceest-rolling "aceest=$($env:IMAGE_REPO):$($env:APP_VERSION)"
+                            Invoke-Kubectl set env deployment/aceest-rolling "APP_VERSION=$($env:APP_VERSION)"
+                            Invoke-Kubectl rollout status deployment/aceest-rolling --timeout=180s
+                        } catch {
+                            if ($deploymentStarted) {
+                                Write-Warning 'Deployment failed; attempting rollback.'
+                                & kubectl rollout undo deployment/aceest-rolling
+                                if ($LASTEXITCODE -ne 0) {
+                                    Write-Warning 'Rollback command failed.'
+                                }
+                                & kubectl rollout status deployment/aceest-rolling --timeout=180s
+                                if ($LASTEXITCODE -ne 0) {
+                                    Write-Warning 'Deployment did not recover after rollback.'
+                                }
+                            }
+                            throw
+                        }
                     '''
                 }
             }
@@ -186,11 +223,14 @@ pipeline {
             when { expression { params.DEPLOY_TO_K8S } }
             steps {
                 withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                    sh '''
-                        set -eu
+                    bat '''
+                        @echo off
                         kubectl get pods
+                        if errorlevel 1 exit /b %errorlevel%
                         kubectl rollout status deployment/aceest-rolling --timeout=180s
+                        if errorlevel 1 exit /b %errorlevel%
                         kubectl get service aceest-rolling-service
+                        if errorlevel 1 exit /b %errorlevel%
                     '''
                 }
             }
