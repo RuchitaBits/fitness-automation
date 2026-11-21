@@ -5,6 +5,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 K8S = ROOT / "k8s"
+ASSIGNMENT_K8S = ROOT / "kubernetes"
 
 
 def load_documents(name):
@@ -125,6 +126,32 @@ def test_rolling_update_and_persistent_storage_are_configured():
     assert container["startupProbe"]["httpGet"]["path"] == "/health"
     assert container["readinessProbe"]["httpGet"]["path"] == "/health"
     assert container["livenessProbe"]["httpGet"]["path"] == "/health"
+
+
+def test_assignment_manifests_configure_rolling_flask_deployment_and_service():
+    deployment = yaml.safe_load(
+        (ASSIGNMENT_K8S / "deployment.yaml").read_text(encoding="utf-8")
+    )
+    service = yaml.safe_load(
+        (ASSIGNMENT_K8S / "service.yaml").read_text(encoding="utf-8")
+    )
+    labels = deployment["spec"]["template"]["metadata"]["labels"]
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert deployment["kind"] == "Deployment"
+    assert deployment["spec"]["strategy"]["type"] == "RollingUpdate"
+    assert deployment["spec"]["selector"]["matchLabels"] == service["spec"]["selector"]
+    assert all(labels[key] == value for key, value in service["spec"]["selector"].items())
+    assert service["kind"] == "Service"
+    assert container["image"] == "aceest-fitness:3.2.4"
+    assert container["ports"][0]["containerPort"] == 5000
+    assert container["readinessProbe"]["httpGet"]["path"] == "/health"
+    secret_names = {
+        item["name"]
+        for item in container["env"]
+        if "secretKeyRef" in item.get("valueFrom", {})
+    }
+    assert {"ADMIN_USERNAME", "ADMIN_PASSWORD", "FLASK_SECRET_KEY"} <= secret_names
 
 
 def test_deployments_use_a_real_image_tag_and_secret_references():

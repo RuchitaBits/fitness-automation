@@ -14,6 +14,21 @@ ACEest Fitness & Gym is a Flask web application for fitness staff to manage clie
 
 The application factory and SQLite data access are in `app.py`. Browser views are in `templates/`, styles are in `static/`, and tests use temporary databases.
 
+## Project Architecture
+
+```text
+Staff browser
+    -> Flask application served by Gunicorn
+    -> SQLite database on the application data volume
+
+GitHub
+    -> GitHub Actions: syntax, lint, tests, container build, health check
+    -> Jenkins: tests, coverage, SonarQube Quality Gate, Docker build
+    -> Optional Docker Hub publish and Kubernetes deployment
+```
+
+The Flask application exposes its health check at `/health`. Kubernetes probes use that endpoint, while the Service routes cluster traffic to the application pods.
+
 ## Technology
 
 - Python 3.12, Flask, SQLite, and Gunicorn
@@ -54,7 +69,7 @@ python -m pytest -q --cov=app --cov-report=xml:coverage.xml --cov-report=html:co
 
 On Windows, `.\scripts\run-local-tests.ps1` runs the coverage command. Generated coverage, cache, database, and temporary files are excluded from Git.
 
-## Docker
+## Docker Build Instructions
 
 Build the runtime image:
 
@@ -83,7 +98,11 @@ docker run --rm aceest-fitness:test
 
 The workflow in `.github/workflows/main.yml` installs development dependencies, compiles and lints the Python code, runs tests, builds the runtime and test images, runs the test image, and checks the runtime health endpoint. It runs on pushes and pull requests.
 
-## Jenkins and SonarQube
+## CI/CD Pipeline Flow
+
+GitHub Actions runs syntax validation, Ruff, Pytest, and Docker image/container checks. Jenkins runs the ordered pipeline below, including coverage and the SonarQube Quality Gate before building and optionally publishing or deploying the image.
+
+## Jenkins Pipeline Stages
 
 `Jenkinsfile` runs these stages in order:
 
@@ -108,13 +127,15 @@ Configure Jenkins with:
 
 Set `IMAGE_REPO` to the Docker Hub namespace/repository to publish. `PUBLISH_IMAGE` and `DEPLOY_TO_K8S` default to false; deployment requires publishing to be enabled. Store credentials in Jenkins or the cluster, not in this repository.
 
-For a local SonarQube scan, generate coverage first, then run:
+## SonarQube Analysis
+
+The repository's `sonar-project.properties` configures source, test, and coverage locations. Jenkins runs analysis after coverage generation and blocks later stages if the Quality Gate fails. A local scan can be run after generating `coverage.xml`:
 
 ```powershell
 sonar-scanner -Dproject.settings=sonar-project.properties
 ```
 
-## Kubernetes
+## Kubernetes Deployment Instructions
 
 The primary rolling deployment uses `k8s/rolling-update.yaml` and the persistent volume claim in `k8s/pvc.yaml`. Create the `aceest-secrets` Kubernetes Secret with keys `admin-username`, `admin-password`, and `flask-secret-key` using your cluster's approved secret-handling process. Do not add Secret manifests or credential values to Git.
 
@@ -131,6 +152,17 @@ kubectl port-forward service/aceest-rolling-service 18080:80
 ```
 
 In another terminal, check `http://127.0.0.1:18080/health`. The rolling Service is ClusterIP. `k8s/service.yaml` belongs to the separate blue-green setup and should not be applied for the rolling deployment.
+
+The assignment submission manifests are also available under `kubernetes/`. They define the `aceest-assignment` Deployment and matching ClusterIP Service. After building/loading `aceest-fitness:3.2.4`, creating the `aceest-secrets` Secret, and applying `k8s/pvc.yaml`, apply the assignment manifests:
+
+```powershell
+kubectl apply -f kubernetes/deployment.yaml
+kubectl apply -f kubernetes/service.yaml
+kubectl rollout status deployment/aceest-assignment --timeout=180s
+kubectl port-forward service/aceest-assignment-service 18080:80
+```
+
+The existing Jenkins deployment continues to use `k8s/rolling-update.yaml`; the two deployment examples have separate names and selectors.
 
 The sample manifests use non-secure session cookies for local HTTP demonstrations. For a production deployment behind TLS, set `SESSION_COOKIE_SECURE=true` through the deployment configuration.
 
@@ -153,14 +185,35 @@ The blue-green, canary, shadow, and A/B resources are separate examples. Canary,
 app.py                       Flask application and SQLite access
 templates/ and static/       Assignment 1 browser interface
 tests/                       Application and Kubernetes manifest tests
-k8s/                         Kubernetes manifests
+k8s/                         Existing deployment strategy manifests
+kubernetes/                  Assignment Deployment and Service manifests
 deployment-strategies/       Deployment strategy notes
 scripts/                     PowerShell deployment and test helpers
-reports/                     Assignment 2 report
+report/                      Assignment 2 submission report
+reports/                     Existing audit report and CI test outputs
 Dockerfile                   Test and non-root runtime image stages
 Jenkinsfile                  Jenkins CI/CD pipeline
 sonar-project.properties     SonarQube and coverage settings
 ```
+
+## Assignment Deliverables
+
+- Flask application and automated tests
+- GitHub Actions and Jenkins CI/CD configuration
+- Docker runtime and test image definitions
+- SonarQube project configuration
+- Kubernetes rolling Deployment and Service manifests
+- Assignment report at `report/Assignment2_Report.md`
+
+## Submission Evidence Placeholders
+
+Replace each placeholder only with evidence captured from the corresponding environment.
+
+- Application endpoint URL: `[Deployment URL: pending deployment]`
+- Jenkins pipeline: `[Screenshot placeholder: Jenkins stages and successful build]`
+- SonarQube: `[Screenshot placeholder: analysis and Quality Gate]`
+- Docker: `[Screenshot placeholder: image build and container health check]`
+- Kubernetes: `[Screenshot placeholder: Deployment, Pods, Service, and health check]`
 
 ## External validation
 
