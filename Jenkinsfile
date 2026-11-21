@@ -10,6 +10,7 @@ pipeline {
     parameters {
         string(name: 'IMAGE_REPO', defaultValue: '', description: 'Docker Hub repository, for example username/aceest-fitness')
         string(name: 'IMAGE_VERSION', defaultValue: '', description: 'Optional image version; defaults to VERSION')
+        string(name: 'PYTHON_EXE', defaultValue: '', description: 'Optional absolute path to python.exe on the Windows Jenkins agent')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Push the verified image')
         booleanParam(name: 'DEPLOY_TO_K8S', defaultValue: false, description: 'Deploy after publishing')
     }
@@ -36,9 +37,38 @@ pipeline {
 
         stage('Set up Python environment') {
             steps {
+                script {
+                    env.PYTHON_EXE = powershell(
+                        returnStdout: true,
+                        script: '''
+                            $pythonExe = $env:PYTHON_EXE
+                            if (-not $pythonExe) {
+                                $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+                                if ($launcher) {
+                                    $pythonExe = & $launcher.Source -3 -c 'import sys; print(sys.executable)' | Select-Object -Last 1
+                                    if ($LASTEXITCODE -ne 0) {
+                                        throw 'The Windows Python launcher could not locate a Python installation.'
+                                    }
+                                }
+                            }
+                            if (-not $pythonExe) {
+                                throw 'Python was not found. Set the PYTHON_EXE build parameter to the full path of python.exe, or install the Python launcher for the Jenkins service account.'
+                            }
+                            $pythonExe = $pythonExe.Trim().Trim('"')
+                            if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
+                                throw "Python executable not found: $pythonExe"
+                            }
+                            $null = & $pythonExe --version
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Python executable failed: $pythonExe"
+                            }
+                            Write-Output $pythonExe
+                        '''
+                    ).trim()
+                }
                 bat '''
                     @echo off
-                    python -m venv .venv
+                    "%PYTHON_EXE%" -m venv .venv
                     if errorlevel 1 exit /b %errorlevel%
                 '''
             }
