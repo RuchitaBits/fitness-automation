@@ -11,6 +11,7 @@ pipeline {
         string(name: 'IMAGE_REPO', defaultValue: '', description: 'Docker Hub repository, for example username/aceest-fitness')
         string(name: 'IMAGE_VERSION', defaultValue: '', description: 'Optional image version; defaults to VERSION')
         string(name: 'PYTHON_EXE', defaultValue: '', description: 'Optional absolute path to python.exe on the Windows Jenkins agent')
+        string(name: 'DOCKER_EXE', defaultValue: 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe', description: 'Docker executable path on Windows; Linux agents use docker from PATH by default')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Push the verified image')
         booleanParam(name: 'DEPLOY_TO_K8S', defaultValue: false, description: 'Deploy after publishing')
     }
@@ -31,6 +32,15 @@ pipeline {
                         script: '@git rev-parse --short=12 HEAD',
                         returnStdout: true
                     ).trim()
+                    def defaultDockerExe = 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
+                    def dockerExe = params.DOCKER_EXE?.trim()
+                    if (isUnix() && (!dockerExe || dockerExe.equalsIgnoreCase(defaultDockerExe))) {
+                        dockerExe = 'docker'
+                    }
+                    if (!dockerExe) {
+                        error('Set DOCKER_EXE to the Docker executable path.')
+                    }
+                    env.DOCKER_EXE = dockerExe
                 }
             }
         }
@@ -156,24 +166,42 @@ pipeline {
             steps {
                 script {
                     env.LOCAL_IMAGE = "aceest-fitness:${env.APP_VERSION}"
+                    if (isUnix()) {
+                        sh '''
+                            set -eu
+                            "$DOCKER_EXE" build --target runtime --build-arg "APP_VERSION=$APP_VERSION" \
+                                --tag "$LOCAL_IMAGE" --tag "aceest-fitness:$GIT_SHORT_SHA" .
+                        '''
+                    } else {
+                        bat '''
+                            @echo off
+                            "%DOCKER_EXE%" build --target runtime --build-arg APP_VERSION="%APP_VERSION%" --tag "%LOCAL_IMAGE%" --tag "aceest-fitness:%GIT_SHORT_SHA%" .
+                            if errorlevel 1 exit /b %errorlevel%
+                        '''
+                    }
                 }
-                bat '''
-                    @echo off
-                    docker build --target runtime --build-arg APP_VERSION="%APP_VERSION%" --tag "%LOCAL_IMAGE%" --tag "aceest-fitness:%GIT_SHORT_SHA%" .
-                    if errorlevel 1 exit /b %errorlevel%
-                '''
             }
         }
 
         stage('Docker test image') {
             steps {
-                bat '''
-                    @echo off
-                    docker build --target test --tag "aceest-fitness:test-%GIT_SHORT_SHA%" .
-                    if errorlevel 1 exit /b %errorlevel%
-                    docker run --rm "aceest-fitness:test-%GIT_SHORT_SHA%"
-                    if errorlevel 1 exit /b %errorlevel%
-                '''
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            set -eu
+                            "$DOCKER_EXE" build --target test --tag "aceest-fitness:test-$GIT_SHORT_SHA" .
+                            "$DOCKER_EXE" run --rm "aceest-fitness:test-$GIT_SHORT_SHA"
+                        '''
+                    } else {
+                        bat '''
+                            @echo off
+                            "%DOCKER_EXE%" build --target test --tag "aceest-fitness:test-%GIT_SHORT_SHA%" .
+                            if errorlevel 1 exit /b %errorlevel%
+                            "%DOCKER_EXE%" run --rm "aceest-fitness:test-%GIT_SHORT_SHA%"
+                            if errorlevel 1 exit /b %errorlevel%
+                        '''
+                    }
+                }
             }
         }
 
@@ -191,10 +219,19 @@ pipeline {
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
-                    powershell '''
-                        $env:DOCKER_PASS | docker login --username $env:DOCKER_USER --password-stdin
-                        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-                    '''
+                    script {
+                        if (isUnix()) {
+                            sh '''
+                                set -eu
+                                printf "%s" "$DOCKER_PASS" | "$DOCKER_EXE" login --username "$DOCKER_USER" --password-stdin
+                            '''
+                        } else {
+                            powershell '''
+                                $env:DOCKER_PASS | & $env:DOCKER_EXE login --username $env:DOCKER_USER --password-stdin
+                                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                            '''
+                        }
+                    }
                 }
             }
         }
@@ -202,17 +239,29 @@ pipeline {
         stage('Docker image tagging and publishing') {
             when { expression { params.PUBLISH_IMAGE } }
             steps {
-                bat '''
-                    @echo off
-                    docker tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%APP_VERSION%"
-                    if errorlevel 1 exit /b %errorlevel%
-                    docker tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%GIT_SHORT_SHA%"
-                    if errorlevel 1 exit /b %errorlevel%
-                    docker push "%IMAGE_REPO%:%APP_VERSION%"
-                    if errorlevel 1 exit /b %errorlevel%
-                    docker push "%IMAGE_REPO%:%GIT_SHORT_SHA%"
-                    if errorlevel 1 exit /b %errorlevel%
-                '''
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            set -eu
+                            "$DOCKER_EXE" tag "$LOCAL_IMAGE" "$IMAGE_REPO:$APP_VERSION"
+                            "$DOCKER_EXE" tag "$LOCAL_IMAGE" "$IMAGE_REPO:$GIT_SHORT_SHA"
+                            "$DOCKER_EXE" push "$IMAGE_REPO:$APP_VERSION"
+                            "$DOCKER_EXE" push "$IMAGE_REPO:$GIT_SHORT_SHA"
+                        '''
+                    } else {
+                        bat '''
+                            @echo off
+                            "%DOCKER_EXE%" tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%APP_VERSION%"
+                            if errorlevel 1 exit /b %errorlevel%
+                            "%DOCKER_EXE%" tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%GIT_SHORT_SHA%"
+                            if errorlevel 1 exit /b %errorlevel%
+                            "%DOCKER_EXE%" push "%IMAGE_REPO%:%APP_VERSION%"
+                            if errorlevel 1 exit /b %errorlevel%
+                            "%DOCKER_EXE%" push "%IMAGE_REPO%:%GIT_SHORT_SHA%"
+                            if errorlevel 1 exit /b %errorlevel%
+                        '''
+                    }
+                }
             }
         }
 
