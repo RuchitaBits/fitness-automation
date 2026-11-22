@@ -228,27 +228,43 @@ pipeline {
                                 set -eu
                                 printf "%s" "$DOCKER_PASS" | "$DOCKER_EXE" login --username "$DOCKER_USER" --password-stdin
                             '''
-                                                } else {
+                        } else {
                             powershell '''
                                 $dockerUser = $env:DOCKER_USER.Trim()
-                                $dockerPassword = $env:DOCKER_PASS.Trim()
-				$bytes = [Text.Encoding]::UTF8.GetBytes($dockerPassword)
-$sha = [Security.Cryptography.SHA256]::Create()
-$fingerprint = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").Substring(0,16)
-
-Write-Host "Jenkins PAT fingerprint: $fingerprint"
-
-Remove-Variable bytes, sha, fingerprint
-
-                                Write-Host "Docker Hub username received: $dockerUser"
-                                Write-Host "Docker Hub password present: $(-not [string]::IsNullOrWhiteSpace($dockerPassword))"
-
+                                $dockerPassword = $env:DOCKER_PASS
                                 if ([string]::IsNullOrWhiteSpace($dockerUser) -or [string]::IsNullOrWhiteSpace($dockerPassword)) {
                                     throw "Docker Hub credentials are empty."
                                 }
 
-                                $dockerPassword | & $env:DOCKER_EXE login --username $dockerUser --password-stdin
-                                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                                $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+                                $processStartInfo.FileName = $env:DOCKER_EXE
+                                $processStartInfo.Arguments = 'login --username "{0}" --password-stdin' -f $dockerUser
+                                $processStartInfo.UseShellExecute = $false
+                                $processStartInfo.RedirectStandardInput = $true
+                                $processStartInfo.CreateNoWindow = $true
+
+                                $dockerProcess = New-Object System.Diagnostics.Process
+                                $dockerStarted = $false
+                                try {
+                                    $dockerProcess.StartInfo = $processStartInfo
+                                    if (-not $dockerProcess.Start()) {
+                                        throw "Unable to start Docker Hub authentication."
+                                    }
+                                    $dockerStarted = $true
+                                    $dockerProcess.StandardInput.WriteLine($dockerPassword)
+                                    $dockerPassword = $null
+                                    $dockerProcess.StandardInput.Close()
+                                    $dockerProcess.WaitForExit()
+                                    if ($dockerProcess.ExitCode -ne 0) {
+                                        throw "Docker Hub authentication failed with exit code $($dockerProcess.ExitCode)."
+                                    }
+                                } finally {
+                                    if ($dockerStarted -and -not $dockerProcess.HasExited) {
+                                        $dockerProcess.Kill()
+                                        $dockerProcess.WaitForExit()
+                                    }
+                                    $dockerProcess.Dispose()
+                                }
                             '''
                         }
                     }
