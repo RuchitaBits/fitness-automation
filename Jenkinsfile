@@ -41,6 +41,9 @@ pipeline {
                         error('Set DOCKER_EXE to the Docker executable path.')
                     }
                     env.DOCKER_EXE = dockerExe
+                    if (!isUnix()) {
+                        env.DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
+                    }
                 }
             }
         }
