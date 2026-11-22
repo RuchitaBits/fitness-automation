@@ -228,9 +228,19 @@ pipeline {
                                 set -eu
                                 printf "%s" "$DOCKER_PASS" | "$DOCKER_EXE" login --username "$DOCKER_USER" --password-stdin
                             '''
-                        } else {
+                                                } else {
                             powershell '''
-                                $env:DOCKER_PASS | & $env:DOCKER_EXE login --username $env:DOCKER_USER --password-stdin
+                                $dockerUser = $env:DOCKER_USER.Trim()
+                                $dockerPassword = $env:DOCKER_PASS.Trim()
+
+                                Write-Host "Docker Hub username received: $dockerUser"
+                                Write-Host "Docker Hub password present: $(-not [string]::IsNullOrWhiteSpace($dockerPassword))"
+
+                                if ([string]::IsNullOrWhiteSpace($dockerUser) -or [string]::IsNullOrWhiteSpace($dockerPassword)) {
+                                    throw "Docker Hub credentials are empty."
+                                }
+
+                                $dockerPassword | & $env:DOCKER_EXE login --username $dockerUser --password-stdin
                                 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
                             '''
                         }
