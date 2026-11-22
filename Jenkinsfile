@@ -121,17 +121,30 @@ pipeline {
 
         stage('SonarQube analysis') {
             steps {
-                withSonarQubeEnv('sonarqube') {
-                    bat '''
-                        @echo off
-                        sonar-scanner -Dproject.settings=sonar-project.properties
-                        if errorlevel 1 exit /b %errorlevel%
-                    '''
+                script {
+                    try {
+                        withSonarQubeEnv('sonarqube') {
+                            bat '''
+                                @echo off
+                                sonar-scanner -Dproject.settings=sonar-project.properties
+                                if errorlevel 1 exit /b %errorlevel%
+                            '''
+                        }
+                    } catch (NoSuchMethodError error) {
+                        if (!error.message?.contains("withSonarQubeEnv")) {
+                            throw error
+                        }
+                        echo 'SonarQube plugin is not installed; skipping SonarQube analysis and quality gate.'
+                        env.SONARQUBE_PLUGIN_AVAILABLE = 'false'
+                    }
                 }
             }
         }
 
         stage('SonarQube Quality Gate') {
+            when {
+                expression { env.SONARQUBE_PLUGIN_AVAILABLE != 'false' }
+            }
             steps {
                 timeout(time: 10, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
