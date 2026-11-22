@@ -232,6 +232,13 @@ pipeline {
                             powershell '''
                                 $dockerUser = $env:DOCKER_USER.Trim()
                                 $dockerPassword = $env:DOCKER_PASS.Trim()
+				$bytes = [Text.Encoding]::UTF8.GetBytes($dockerPassword)
+$sha = [Security.Cryptography.SHA256]::Create()
+$fingerprint = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").Substring(0,16)
+
+Write-Host "Jenkins PAT fingerprint: $fingerprint"
+
+Remove-Variable bytes, sha, fingerprint
 
                                 Write-Host "Docker Hub username received: $dockerUser"
                                 Write-Host "Docker Hub password present: $(-not [string]::IsNullOrWhiteSpace($dockerPassword))"
