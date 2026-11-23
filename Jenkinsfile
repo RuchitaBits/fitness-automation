@@ -267,15 +267,29 @@ pipeline {
                             sh '''
                                 set +x
                                 set -eu
+                                dockerPat="${DOCKER_PAT:-}"
+                                trap 'unset dockerPat DOCKER_PAT' EXIT
+                                printf 'DOCKER_USER: %s\n' "${DOCKER_USER:-}"
+                                if [ -z "$dockerPat" ]; then
+                                    patNullOrEmpty=true
+                                else
+                                    patNullOrEmpty=false
+                                fi
+                                printf 'DOCKER_PAT null or empty: %s\n' "$patNullOrEmpty"
+                                printf 'DOCKER_PAT length: %s\n' "${#dockerPat}"
+                                case "$dockerPat" in
+                                    dckr_pat_*) patStartsWithPrefix=true ;;
+                                    *) patStartsWithPrefix=false ;;
+                                esac
+                                printf 'DOCKER_PAT starts with dckr_pat_: %s\n' "$patStartsWithPrefix"
                                 if [ -z "${DOCKER_USER:-}" ]; then
                                     echo "Set the DOCKER_USER build parameter before publishing." >&2
                                     exit 1
                                 fi
-                                if [ -z "${DOCKER_PAT:-}" ]; then
+                                if [ -z "$dockerPat" ]; then
                                     echo "Set the DOCKER_PAT build parameter before publishing." >&2
                                     exit 1
                                 fi
-                                dockerPat="$DOCKER_PAT"
                                 unset DOCKER_PAT
                                 set +e
                                 printf "%s" "$dockerPat" | "$DOCKER_EXE" login --username "$DOCKER_USER" --password-stdin
@@ -293,6 +307,16 @@ pipeline {
                                 $passwordBytes = $null
 
                                 try {
+                                    $patIsNullOrEmpty = [string]::IsNullOrEmpty($dockerPat).ToString().ToLowerInvariant()
+                                    $patStartsWithPrefix = $dockerPat.StartsWith(
+                                        'dckr_pat_',
+                                        [StringComparison]::Ordinal
+                                    ).ToString().ToLowerInvariant()
+                                    Write-Output "DOCKER_USER: $dockerUser"
+                                    Write-Output "DOCKER_PAT null or empty: $patIsNullOrEmpty"
+                                    Write-Output "DOCKER_PAT length: $($dockerPat.Length)"
+                                    Write-Output "DOCKER_PAT starts with dckr_pat_: $patStartsWithPrefix"
+
                                     if ([string]::IsNullOrWhiteSpace($dockerUser)) {
                                         throw "Set the DOCKER_USER build parameter before publishing."
                                     }
