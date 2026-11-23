@@ -217,6 +217,32 @@ pipeline {
                         error('Set IMAGE_REPO to username/aceest-fitness before publishing.')
                     }
                 }
+                script {
+                    if (!isUnix()) {
+                        powershell '''
+                            $dockerConfig = $env:DOCKER_CONFIG
+                            if ([string]::IsNullOrWhiteSpace($dockerConfig)) {
+                                $dockerConfig = 'not set'
+                            }
+
+                            Write-Output "Windows identity: $(whoami)"
+                            Write-Output "USERPROFILE: $env:USERPROFILE"
+                            Write-Output "DOCKER_CONFIG: $dockerConfig"
+                            Write-Output "Docker executable: $env:DOCKER_EXE"
+
+                            $dockerContext = & $env:DOCKER_EXE context show
+                            Write-Output "Docker context: $dockerContext"
+
+                            $dockerServerName = & $env:DOCKER_EXE info --format '{{.Name}}'
+                            Write-Output "Docker server name: $dockerServerName"
+
+                            $dockerClientVersion = & $env:DOCKER_EXE version --format '{{.Client.Version}}'
+                            $dockerServerVersion = & $env:DOCKER_EXE version --format '{{.Server.Version}}'
+                            Write-Output "Docker client version: $dockerClientVersion"
+                            Write-Output "Docker server version: $dockerServerVersion"
+                        '''
+                    }
+                }
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-pat-new',
                     usernameVariable: 'DOCKER_USER',
