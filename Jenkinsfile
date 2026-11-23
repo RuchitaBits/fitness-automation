@@ -311,9 +311,20 @@ pipeline {
                                         throw "Unable to start Docker Hub authentication."
                                     }
                                     $dockerStarted = $true
-                                    $dockerProcess.StandardInput.WriteLine($dockerPassword)
+                                    $passwordBytes = [Text.Encoding]::UTF8.GetBytes($trimmedDockerPassword)
+                                    try {
+                                        $dockerProcess.StandardInput.BaseStream.Write(
+                                            $passwordBytes,
+                                            0,
+                                            $passwordBytes.Length
+                                        )
+                                        $dockerProcess.StandardInput.BaseStream.Flush()
+                                    } finally {
+                                        [Array]::Clear($passwordBytes, 0, $passwordBytes.Length)
+                                        $dockerProcess.StandardInput.Close()
+                                    }
                                     $dockerPassword = $null
-                                    $dockerProcess.StandardInput.Close()
+                                    $trimmedDockerPassword = $null
                                     $dockerProcess.WaitForExit()
                                     if ($dockerProcess.ExitCode -ne 0) {
                                         throw "Docker Hub authentication failed with exit code $($dockerProcess.ExitCode)."
