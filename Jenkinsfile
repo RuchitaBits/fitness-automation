@@ -47,6 +47,7 @@ pipeline {
                     }
                     env.DOCKER_EXE = dockerExe
                     if (!isUnix()) {
+                        env.DOCKER_CONTEXT = ''
                         env.DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
                     }
                 }
@@ -185,14 +186,14 @@ pipeline {
                         '''
                     } else {
                         powershell '''
-                            $null = & $env:DOCKER_EXE context inspect desktop-linux 2>$null
-                            if ($LASTEXITCODE -ne 0) {
-                                throw "Required Docker context 'desktop-linux' is unavailable for the Jenkins account."
+                            $dockerServerVersion = & $env:DOCKER_EXE info --format '{{.ServerVersion}}' 2>$null
+                            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($dockerServerVersion)) {
+                                throw "Cannot connect to Docker Engine at npipe:////./pipe/dockerDesktopLinuxEngine. Ensure Docker Desktop's Linux engine is running and the Jenkins service account can access the named pipe."
                             }
                         '''
                         bat '''
                             @echo off
-                            "%DOCKER_EXE%" --context desktop-linux build --target runtime --build-arg APP_VERSION="%IMAGE_VERSION%" --tag "%LOCAL_IMAGE%" --tag "aceest-fitness:%GIT_SHORT_SHA%" .
+                            "%DOCKER_EXE%" build --target runtime --build-arg APP_VERSION="%IMAGE_VERSION%" --tag "%LOCAL_IMAGE%" --tag "aceest-fitness:%GIT_SHORT_SHA%" .
                             if errorlevel 1 exit /b %errorlevel%
                         '''
                     }
@@ -212,9 +213,9 @@ pipeline {
                     } else {
                         bat '''
                             @echo off
-                            "%DOCKER_EXE%" --context desktop-linux build --target test --tag "aceest-fitness:test-%GIT_SHORT_SHA%" .
+                            "%DOCKER_EXE%" build --target test --tag "aceest-fitness:test-%GIT_SHORT_SHA%" .
                             if errorlevel 1 exit /b %errorlevel%
-                            "%DOCKER_EXE%" --context desktop-linux run --rm "aceest-fitness:test-%GIT_SHORT_SHA%"
+                            "%DOCKER_EXE%" run --rm "aceest-fitness:test-%GIT_SHORT_SHA%"
                             if errorlevel 1 exit /b %errorlevel%
                         '''
                     }
@@ -242,15 +243,13 @@ pipeline {
                             Write-Output "USERPROFILE: $env:USERPROFILE"
                             Write-Output "DOCKER_CONFIG: $dockerConfig"
                             Write-Output "Docker executable: $env:DOCKER_EXE"
+                            Write-Output "Docker endpoint: $env:DOCKER_HOST"
 
-                            $dockerContext = & $env:DOCKER_EXE --context desktop-linux context show
-                            Write-Output "Docker context: $dockerContext"
-
-                            $dockerServerName = & $env:DOCKER_EXE --context desktop-linux info --format '{{.Name}}'
+                            $dockerServerName = & $env:DOCKER_EXE info --format '{{.Name}}'
                             Write-Output "Docker server name: $dockerServerName"
 
-                            $dockerClientVersion = & $env:DOCKER_EXE --context desktop-linux version --format '{{.Client.Version}}'
-                            $dockerServerVersion = & $env:DOCKER_EXE --context desktop-linux version --format '{{.Server.Version}}'
+                            $dockerClientVersion = & $env:DOCKER_EXE version --format '{{.Client.Version}}'
+                            $dockerServerVersion = & $env:DOCKER_EXE version --format '{{.Server.Version}}'
                             Write-Output "Docker client version: $dockerClientVersion"
                             Write-Output "Docker server version: $dockerServerVersion"
                         '''
@@ -299,7 +298,7 @@ pipeline {
 
                                 $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
                                 $processStartInfo.FileName = $env:DOCKER_EXE
-                                $processStartInfo.Arguments = '--context desktop-linux login --username "{0}" --password-stdin' -f $dockerUser
+                                $processStartInfo.Arguments = 'login --username "{0}" --password-stdin' -f $dockerUser
                                 $processStartInfo.UseShellExecute = $false
                                 $processStartInfo.RedirectStandardInput = $true
                                 $processStartInfo.CreateNoWindow = $true
@@ -348,13 +347,13 @@ pipeline {
                     } else {
                         bat '''
                             @echo off
-                            "%DOCKER_EXE%" --context desktop-linux tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%IMAGE_VERSION%"
+                            "%DOCKER_EXE%" tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%IMAGE_VERSION%"
                             if errorlevel 1 exit /b %errorlevel%
-                            "%DOCKER_EXE%" --context desktop-linux tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%GIT_SHORT_SHA%"
+                            "%DOCKER_EXE%" tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%GIT_SHORT_SHA%"
                             if errorlevel 1 exit /b %errorlevel%
-                            "%DOCKER_EXE%" --context desktop-linux push "%IMAGE_REPO%:%IMAGE_VERSION%"
+                            "%DOCKER_EXE%" push "%IMAGE_REPO%:%IMAGE_VERSION%"
                             if errorlevel 1 exit /b %errorlevel%
-                            "%DOCKER_EXE%" --context desktop-linux push "%IMAGE_REPO%:%GIT_SHORT_SHA%"
+                            "%DOCKER_EXE%" push "%IMAGE_REPO%:%GIT_SHORT_SHA%"
                             if errorlevel 1 exit /b %errorlevel%
                         '''
                     }
