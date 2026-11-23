@@ -13,7 +13,6 @@ pipeline {
         string(name: 'PYTHON_EXE', defaultValue: 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\Python\\Python314\\python.exe', description: 'Absolute path to python.exe on the Windows Jenkins agent')
         string(name: 'DOCKER_EXE', defaultValue: 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe', description: 'Docker executable path on Windows; Linux agents use docker from PATH by default')
         string(name: 'DOCKER_USER', defaultValue: 'ruchitabits', description: 'Docker Hub username')
-        password(name: 'DOCKER_PAT', defaultValue: '', description: 'Docker Hub personal access token')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Push the verified image')
         booleanParam(name: 'DEPLOY_TO_K8S', defaultValue: false, description: 'Deploy after publishing')
     }
@@ -261,27 +260,14 @@ pipeline {
                         '''
                     }
                 }
-                script {
-                    try {
+                withCredentials([string(credentialsId: 'dockerhub-pat-working', variable: 'DOCKER_PAT')]) {
+                    script {
                         if (isUnix()) {
                             sh '''
                                 set +x
                                 set -eu
                                 dockerPat="${DOCKER_PAT:-}"
                                 trap 'unset dockerPat DOCKER_PAT' EXIT
-                                printf 'DOCKER_USER: %s\n' "${DOCKER_USER:-}"
-                                if [ -z "$dockerPat" ]; then
-                                    patNullOrEmpty=true
-                                else
-                                    patNullOrEmpty=false
-                                fi
-                                printf 'DOCKER_PAT null or empty: %s\n' "$patNullOrEmpty"
-                                printf 'DOCKER_PAT length: %s\n' "${#dockerPat}"
-                                case "$dockerPat" in
-                                    dckr_pat_*) patStartsWithPrefix=true ;;
-                                    *) patStartsWithPrefix=false ;;
-                                esac
-                                printf 'DOCKER_PAT starts with dckr_pat_: %s\n' "$patStartsWithPrefix"
                                 if [ -z "${DOCKER_USER:-}" ]; then
                                     echo "Set the DOCKER_USER build parameter before publishing." >&2
                                     exit 1
@@ -307,16 +293,6 @@ pipeline {
                                 $passwordBytes = $null
 
                                 try {
-                                    $patIsNullOrEmpty = [string]::IsNullOrEmpty($dockerPat).ToString().ToLowerInvariant()
-                                    $patStartsWithPrefix = $dockerPat.StartsWith(
-                                        'dckr_pat_',
-                                        [StringComparison]::Ordinal
-                                    ).ToString().ToLowerInvariant()
-                                    Write-Output "DOCKER_USER: $dockerUser"
-                                    Write-Output "DOCKER_PAT null or empty: $patIsNullOrEmpty"
-                                    Write-Output "DOCKER_PAT length: $($dockerPat.Length)"
-                                    Write-Output "DOCKER_PAT starts with dckr_pat_: $patStartsWithPrefix"
-
                                     if ([string]::IsNullOrWhiteSpace($dockerUser)) {
                                         throw "Set the DOCKER_USER build parameter before publishing."
                                     }
@@ -374,8 +350,6 @@ pipeline {
                                 }
                             '''
                         }
-                    } finally {
-                        env.DOCKER_PAT = ''
                     }
                 }
             }
