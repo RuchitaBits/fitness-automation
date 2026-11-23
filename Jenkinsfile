@@ -12,6 +12,8 @@ pipeline {
         string(name: 'IMAGE_VERSION', defaultValue: 'v1', description: 'Optional image version')
         string(name: 'PYTHON_EXE', defaultValue: 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\Python\\Python314\\python.exe', description: 'Absolute path to python.exe on the Windows Jenkins agent')
         string(name: 'DOCKER_EXE', defaultValue: 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe', description: 'Docker executable path on Windows; Linux agents use docker from PATH by default')
+        string(name: 'DOCKER_USER', defaultValue: 'ruchitabits', description: 'Docker Hub username')
+        password(name: 'DOCKER_PAT', defaultValue: '', description: 'Docker Hub personal access token')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Push the verified image')
         booleanParam(name: 'DEPLOY_TO_K8S', defaultValue: false, description: 'Deploy after publishing')
     }
@@ -29,6 +31,10 @@ pipeline {
                 checkout scm
                 script {
                     env.IMAGE_REPO = params.IMAGE_REPO?.trim() ?: env.IMAGE_REPO
+                    def dockerUser = params.DOCKER_USER?.trim()
+                    if (dockerUser && env.IMAGE_REPO == 'ruchitabits/aceest-fitness') {
+                        env.IMAGE_REPO = "${dockerUser}/aceest-fitness"
+                    }
                     env.IMAGE_VERSION = params.IMAGE_VERSION?.trim() ?: env.IMAGE_VERSION
                     env.APP_VERSION = env.IMAGE_VERSION?.trim()
                         ? env.IMAGE_VERSION.trim()
@@ -255,63 +261,62 @@ pipeline {
                         '''
                     }
                 }
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-pat-new',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
-                    script {
+                script {
+                    try {
                         if (isUnix()) {
                             sh '''
+                                set +x
                                 set -eu
-                                printf "%s" "$DOCKER_PASS" | "$DOCKER_EXE" login --username "$DOCKER_USER" --password-stdin
+                                if [ -z "${DOCKER_USER:-}" ]; then
+                                    echo "Set the DOCKER_USER build parameter before publishing." >&2
+                                    exit 1
+                                fi
+                                if [ -z "${DOCKER_PAT:-}" ]; then
+                                    echo "Set the DOCKER_PAT build parameter before publishing." >&2
+                                    exit 1
+                                fi
+                                dockerPat="$DOCKER_PAT"
+                                unset DOCKER_PAT
+                                set +e
+                                printf "%s" "$dockerPat" | "$DOCKER_EXE" login --username "$DOCKER_USER" --password-stdin
+                                login_status=$?
+                                set -e
+                                unset dockerPat
+                                exit "$login_status"
                             '''
                         } else {
                             powershell '''
-                                $dockerUser = $env:DOCKER_USER.Trim()
-                                $dockerPassword = $env:DOCKER_PASS
-                                $trimmedDockerPassword = ''
-                                if ($null -ne $dockerPassword) {
-                                    $trimmedDockerPassword = $dockerPassword.Trim()
-                                }
-                                $passwordPresent = 'false'
-                                if (-not [string]::IsNullOrWhiteSpace($dockerPassword)) {
-                                    $passwordPresent = 'true'
-                                }
-                                $passwordBytes = [Text.Encoding]::UTF8.GetBytes($trimmedDockerPassword)
-                                $sha256 = [Security.Cryptography.SHA256]::Create()
-                                try {
-                                    $passwordFingerprint = ([BitConverter]::ToString($sha256.ComputeHash($passwordBytes))).Replace("-", "").Substring(0, 16)
-                                } finally {
-                                    $sha256.Dispose()
-                                    [Array]::Clear($passwordBytes, 0, $passwordBytes.Length)
-                                }
-
-                                Write-Output "DOCKER_USER: $env:DOCKER_USER"
-                                Write-Output "DOCKER_PASS present: $passwordPresent"
-                                Write-Output "DOCKER_PASS trimmed length: $($trimmedDockerPassword.Length)"
-                                Write-Output "DOCKER_PASS SHA-256 fingerprint (first 16 hex): $passwordFingerprint"
-
-                                if ([string]::IsNullOrWhiteSpace($dockerUser) -or [string]::IsNullOrWhiteSpace($dockerPassword)) {
-                                    throw "Docker Hub credentials are empty."
-                                }
-
-                                $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
-                                $processStartInfo.FileName = $env:DOCKER_EXE
-                                $processStartInfo.Arguments = 'login --username "{0}" --password-stdin' -f $dockerUser
-                                $processStartInfo.UseShellExecute = $false
-                                $processStartInfo.RedirectStandardInput = $true
-                                $processStartInfo.CreateNoWindow = $true
-
-                                $dockerProcess = New-Object System.Diagnostics.Process
+                                $dockerUser = [string]$env:DOCKER_USER
+                                $dockerPat = [string]$env:DOCKER_PAT
+                                $dockerProcess = $null
                                 $dockerStarted = $false
+                                $passwordBytes = $null
+
                                 try {
+                                    if ([string]::IsNullOrWhiteSpace($dockerUser)) {
+                                        throw "Set the DOCKER_USER build parameter before publishing."
+                                    }
+                                    if ([string]::IsNullOrWhiteSpace($dockerPat)) {
+                                        throw "Set the DOCKER_PAT build parameter before publishing."
+                                    }
+
+                                    $dockerUser = $dockerUser.Trim()
+                                    $passwordBytes = [Text.Encoding]::UTF8.GetBytes($dockerPat)
+                                    Remove-Item Env:DOCKER_PAT -ErrorAction SilentlyContinue
+
+                                    $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+                                    $processStartInfo.FileName = $env:DOCKER_EXE
+                                    $processStartInfo.Arguments = 'login --username "{0}" --password-stdin' -f $dockerUser
+                                    $processStartInfo.UseShellExecute = $false
+                                    $processStartInfo.RedirectStandardInput = $true
+                                    $processStartInfo.CreateNoWindow = $true
+
+                                    $dockerProcess = New-Object System.Diagnostics.Process
                                     $dockerProcess.StartInfo = $processStartInfo
                                     if (-not $dockerProcess.Start()) {
                                         throw "Unable to start Docker Hub authentication."
                                     }
                                     $dockerStarted = $true
-                                    $passwordBytes = [Text.Encoding]::UTF8.GetBytes($trimmedDockerPassword)
                                     try {
                                         $dockerProcess.StandardInput.BaseStream.Write(
                                             $passwordBytes,
@@ -323,21 +328,30 @@ pipeline {
                                         [Array]::Clear($passwordBytes, 0, $passwordBytes.Length)
                                         $dockerProcess.StandardInput.Close()
                                     }
-                                    $dockerPassword = $null
-                                    $trimmedDockerPassword = $null
+
+                                    $dockerPat = $null
                                     $dockerProcess.WaitForExit()
                                     if ($dockerProcess.ExitCode -ne 0) {
                                         throw "Docker Hub authentication failed with exit code $($dockerProcess.ExitCode)."
                                     }
                                 } finally {
+                                    if ($null -ne $passwordBytes) {
+                                        [Array]::Clear($passwordBytes, 0, $passwordBytes.Length)
+                                    }
+                                    $dockerPat = $null
+                                    Remove-Item Env:DOCKER_PAT -ErrorAction SilentlyContinue
                                     if ($dockerStarted -and -not $dockerProcess.HasExited) {
                                         $dockerProcess.Kill()
                                         $dockerProcess.WaitForExit()
                                     }
-                                    $dockerProcess.Dispose()
+                                    if ($null -ne $dockerProcess) {
+                                        $dockerProcess.Dispose()
+                                    }
                                 }
                             '''
                         }
+                    } finally {
+                        env.DOCKER_PAT = ''
                     }
                 }
             }
