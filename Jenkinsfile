@@ -8,9 +8,9 @@ pipeline {
     }
 
     parameters {
-        string(name: 'IMAGE_REPO', defaultValue: '', description: 'Docker Hub repository, for example username/aceest-fitness')
-        string(name: 'IMAGE_VERSION', defaultValue: '', description: 'Optional image version; defaults to VERSION')
-        string(name: 'PYTHON_EXE', defaultValue: '', description: 'Optional absolute path to python.exe on the Windows Jenkins agent')
+        string(name: 'IMAGE_REPO', defaultValue: 'ruchitabits/aceest-fitness', description: 'Docker Hub repository, for example username/aceest-fitness')
+        string(name: 'IMAGE_VERSION', defaultValue: 'v1', description: 'Optional image version')
+        string(name: 'PYTHON_EXE', defaultValue: 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\Python\\Python314\\python.exe', description: 'Absolute path to python.exe on the Windows Jenkins agent')
         string(name: 'DOCKER_EXE', defaultValue: 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe', description: 'Docker executable path on Windows; Linux agents use docker from PATH by default')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Push the verified image')
         booleanParam(name: 'DEPLOY_TO_K8S', defaultValue: false, description: 'Deploy after publishing')
@@ -18,6 +18,9 @@ pipeline {
 
     environment {
         PYTHONUNBUFFERED = '1'
+        IMAGE_REPO = 'ruchitabits/aceest-fitness'
+        IMAGE_VERSION = 'v1'
+        PYTHON_EXE = 'C:\\Users\\ruchi\\AppData\\Local\\Programs\\Python\\Python314\\python.exe'
     }
 
     stages {
@@ -25,8 +28,10 @@ pipeline {
             steps {
                 checkout scm
                 script {
-                    env.APP_VERSION = params.IMAGE_VERSION.trim()
-                        ? params.IMAGE_VERSION.trim()
+                    env.IMAGE_REPO = params.IMAGE_REPO?.trim() ?: env.IMAGE_REPO
+                    env.IMAGE_VERSION = params.IMAGE_VERSION?.trim() ?: env.IMAGE_VERSION
+                    env.APP_VERSION = env.IMAGE_VERSION?.trim()
+                        ? env.IMAGE_VERSION.trim()
                         : readFile('VERSION').trim()
                     env.GIT_SHORT_SHA = bat(
                         script: '@git rev-parse --short=12 HEAD',
@@ -51,6 +56,9 @@ pipeline {
         stage('Set up Python environment') {
             steps {
                 script {
+                    if (params.PYTHON_EXE?.trim()) {
+                        env.PYTHON_EXE = params.PYTHON_EXE.trim()
+                    }
                     env.PYTHON_EXE = powershell(
                         returnStdout: true,
                         script: '''
@@ -168,17 +176,17 @@ pipeline {
         stage('Docker image build') {
             steps {
                 script {
-                    env.LOCAL_IMAGE = "aceest-fitness:${env.APP_VERSION}"
+                    env.LOCAL_IMAGE = "aceest-fitness:${env.IMAGE_VERSION}"
                     if (isUnix()) {
                         sh '''
                             set -eu
-                            "$DOCKER_EXE" build --target runtime --build-arg "APP_VERSION=$APP_VERSION" \
+                            "$DOCKER_EXE" build --target runtime --build-arg "APP_VERSION=$IMAGE_VERSION" \
                                 --tag "$LOCAL_IMAGE" --tag "aceest-fitness:$GIT_SHORT_SHA" .
                         '''
                     } else {
                         bat '''
                             @echo off
-                            "%DOCKER_EXE%" build --target runtime --build-arg APP_VERSION="%APP_VERSION%" --tag "%LOCAL_IMAGE%" --tag "aceest-fitness:%GIT_SHORT_SHA%" .
+                            "%DOCKER_EXE%" build --target runtime --build-arg APP_VERSION="%IMAGE_VERSION%" --tag "%LOCAL_IMAGE%" --tag "aceest-fitness:%GIT_SHORT_SHA%" .
                             if errorlevel 1 exit /b %errorlevel%
                         '''
                     }
@@ -212,8 +220,7 @@ pipeline {
             when { expression { params.PUBLISH_IMAGE } }
             steps {
                 script {
-                    env.IMAGE_REPO = params.IMAGE_REPO.trim()
-                    if (!env.IMAGE_REPO) {
+                    if (!env.IMAGE_REPO?.trim()) {
                         error('Set IMAGE_REPO to username/aceest-fitness before publishing.')
                     }
                 }
@@ -258,6 +265,28 @@ pipeline {
                             powershell '''
                                 $dockerUser = $env:DOCKER_USER.Trim()
                                 $dockerPassword = $env:DOCKER_PASS
+                                $trimmedDockerPassword = ''
+                                if ($null -ne $dockerPassword) {
+                                    $trimmedDockerPassword = $dockerPassword.Trim()
+                                }
+                                $passwordPresent = 'false'
+                                if (-not [string]::IsNullOrWhiteSpace($dockerPassword)) {
+                                    $passwordPresent = 'true'
+                                }
+                                $passwordBytes = [Text.Encoding]::UTF8.GetBytes($trimmedDockerPassword)
+                                $sha256 = [Security.Cryptography.SHA256]::Create()
+                                try {
+                                    $passwordFingerprint = ([BitConverter]::ToString($sha256.ComputeHash($passwordBytes))).Replace("-", "").Substring(0, 16)
+                                } finally {
+                                    $sha256.Dispose()
+                                    [Array]::Clear($passwordBytes, 0, $passwordBytes.Length)
+                                }
+
+                                Write-Output "DOCKER_USER: $env:DOCKER_USER"
+                                Write-Output "DOCKER_PASS present: $passwordPresent"
+                                Write-Output "DOCKER_PASS trimmed length: $($trimmedDockerPassword.Length)"
+                                Write-Output "DOCKER_PASS SHA-256 fingerprint (first 16 hex): $passwordFingerprint"
+
                                 if ([string]::IsNullOrWhiteSpace($dockerUser) -or [string]::IsNullOrWhiteSpace($dockerPassword)) {
                                     throw "Docker Hub credentials are empty."
                                 }
@@ -305,19 +334,19 @@ pipeline {
                     if (isUnix()) {
                         sh '''
                             set -eu
-                            "$DOCKER_EXE" tag "$LOCAL_IMAGE" "$IMAGE_REPO:$APP_VERSION"
+                            "$DOCKER_EXE" tag "$LOCAL_IMAGE" "$IMAGE_REPO:$IMAGE_VERSION"
                             "$DOCKER_EXE" tag "$LOCAL_IMAGE" "$IMAGE_REPO:$GIT_SHORT_SHA"
-                            "$DOCKER_EXE" push "$IMAGE_REPO:$APP_VERSION"
+                            "$DOCKER_EXE" push "$IMAGE_REPO:$IMAGE_VERSION"
                             "$DOCKER_EXE" push "$IMAGE_REPO:$GIT_SHORT_SHA"
                         '''
                     } else {
                         bat '''
                             @echo off
-                            "%DOCKER_EXE%" tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%APP_VERSION%"
+                            "%DOCKER_EXE%" tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%IMAGE_VERSION%"
                             if errorlevel 1 exit /b %errorlevel%
                             "%DOCKER_EXE%" tag "%LOCAL_IMAGE%" "%IMAGE_REPO%:%GIT_SHORT_SHA%"
                             if errorlevel 1 exit /b %errorlevel%
-                            "%DOCKER_EXE%" push "%IMAGE_REPO%:%APP_VERSION%"
+                            "%DOCKER_EXE%" push "%IMAGE_REPO%:%IMAGE_VERSION%"
                             if errorlevel 1 exit /b %errorlevel%
                             "%DOCKER_EXE%" push "%IMAGE_REPO%:%GIT_SHORT_SHA%"
                             if errorlevel 1 exit /b %errorlevel%
