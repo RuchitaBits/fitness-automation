@@ -290,7 +290,6 @@ pipeline {
                                 $dockerPat = [string]$env:DOCKER_PAT
                                 $dockerProcess = $null
                                 $dockerStarted = $false
-                                $passwordBytes = $null
 
                                 try {
                                     if ([string]::IsNullOrWhiteSpace($dockerUser)) {
@@ -301,7 +300,7 @@ pipeline {
                                     }
 
                                     $dockerUser = $dockerUser.Trim()
-                                    $passwordBytes = [Text.Encoding]::UTF8.GetBytes($dockerPat)
+                                    $dockerPat = $dockerPat.Trim()
                                     Remove-Item Env:DOCKER_PAT -ErrorAction SilentlyContinue
 
                                     $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -318,26 +317,18 @@ pipeline {
                                     }
                                     $dockerStarted = $true
                                     try {
-                                        $dockerProcess.StandardInput.BaseStream.Write(
-                                            $passwordBytes,
-                                            0,
-                                            $passwordBytes.Length
-                                        )
-                                        $dockerProcess.StandardInput.BaseStream.Flush()
+                                        $dockerProcess.StandardInput.WriteLine($dockerPat)
+                                        $dockerProcess.StandardInput.Flush()
                                     } finally {
-                                        [Array]::Clear($passwordBytes, 0, $passwordBytes.Length)
+                                        $dockerPat = $null
                                         $dockerProcess.StandardInput.Close()
                                     }
 
-                                    $dockerPat = $null
                                     $dockerProcess.WaitForExit()
                                     if ($dockerProcess.ExitCode -ne 0) {
                                         throw "Docker Hub authentication failed with exit code $($dockerProcess.ExitCode)."
                                     }
                                 } finally {
-                                    if ($null -ne $passwordBytes) {
-                                        [Array]::Clear($passwordBytes, 0, $passwordBytes.Length)
-                                    }
                                     $dockerPat = $null
                                     Remove-Item Env:DOCKER_PAT -ErrorAction SilentlyContinue
                                     if ($dockerStarted -and -not $dockerProcess.HasExited) {
