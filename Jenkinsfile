@@ -292,6 +292,9 @@ pipeline {
                                 $dockerStarted = $false
                                 $stdoutTask = $null
                                 $stderrTask = $null
+                                $dockerStdout = ''
+                                $dockerStderr = ''
+                                $exceptionMessage = ''
                                 $authenticationSucceeded = $false
                                 $cleanupSucceeded = $true
                                 $exitCode = 1
@@ -333,17 +336,24 @@ pipeline {
                                         $dockerProcess.StandardInput.WriteLine($dockerPat)
                                         $dockerProcess.StandardInput.Flush()
                                     } finally {
-                                        $dockerPat = $null
                                         $dockerProcess.StandardInput.Close()
                                     }
 
                                     $dockerProcess.WaitForExit()
-                                    $null = $stdoutTask.GetAwaiter().GetResult()
-                                    $null = $stderrTask.GetAwaiter().GetResult()
+                                    $dockerStdout = [string]$stdoutTask.GetAwaiter().GetResult()
+                                    $dockerStderr = [string]$stderrTask.GetAwaiter().GetResult()
+                                    if (-not [string]::IsNullOrEmpty($dockerPat)) {
+                                        $dockerStdout = $dockerStdout.Replace($dockerPat, '[REDACTED]')
+                                        $dockerStderr = $dockerStderr.Replace($dockerPat, '[REDACTED]')
+                                    }
                                     $exitCode = $dockerProcess.ExitCode
                                     $authenticationSucceeded = ($exitCode -eq 0)
                                 } catch {
                                     $authenticationSucceeded = $false
+                                    $exceptionMessage = [string]$_.Exception.Message
+                                    if (-not [string]::IsNullOrEmpty($dockerPat)) {
+                                        $exceptionMessage = $exceptionMessage.Replace($dockerPat, '[REDACTED]')
+                                    }
                                     if ($dockerStarted -and $dockerProcess.HasExited) {
                                         $exitCode = $dockerProcess.ExitCode
                                     } else {
@@ -413,10 +423,25 @@ pipeline {
                                 if (-not $authenticationSucceeded -and $exitCode -eq 0) {
                                     $exitCode = 1
                                 }
+                                $diagnosticText = "$dockerStdout`n$dockerStderr`n$exceptionMessage"
                                 if ($authenticationSucceeded) {
-                                    Write-Output "Docker Hub authentication succeeded (exit code: $exitCode)."
+                                    $diagnosticCategory = 'Docker Hub authentication succeeded.'
+                                } elseif (-not $cleanupSucceeded) {
+                                    $diagnosticCategory = 'Docker authentication process failed.'
+                                } elseif ($diagnosticText -match '(?i)(unauthorized|incorrect username or password|authentication required|denied: requested access)') {
+                                    $diagnosticCategory = 'Docker Hub rejected the credentials (unauthorized).'
+                                } elseif ($diagnosticText -match '(?i)(no such host|connection refused|connection reset|network is unreachable|no route to host|timed out|timeout|deadline exceeded|TLS handshake|unable to connect|could not connect|cannot connect|dial tcp|proxyconnect|error during connect|cannot connect to the docker daemon|pipe.*(not found|does not exist|cannot find)|system cannot find the file specified)') {
+                                    $diagnosticCategory = 'Docker Hub connection failed.'
                                 } else {
-                                    Write-Output "Docker Hub authentication failed (exit code: $exitCode)."
+                                    $diagnosticCategory = 'Docker authentication process failed.'
+                                }
+                                $dockerStdout = $null
+                                $dockerStderr = $null
+                                $exceptionMessage = $null
+                                $diagnosticText = $null
+                                $dockerPat = $null
+                                Write-Output $diagnosticCategory
+                                if (-not $authenticationSucceeded) {
                                     exit $exitCode
                                 }
                             '''
