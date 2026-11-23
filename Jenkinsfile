@@ -283,8 +283,10 @@ pipeline {
                             '''
                         } else {
                             powershell '''
+                                $ErrorActionPreference = 'Stop'
                                 $dockerUser = [string]$env:DOCKER_USER
                                 $dockerPat = [string]$env:DOCKER_PAT
+                                $trimmedDockerPat = $null
                                 $previousDockerConfig = $env:DOCKER_CONFIG
                                 $hadDockerConfig = Test-Path Env:DOCKER_CONFIG
                                 $tempDockerConfig = $null
@@ -294,45 +296,43 @@ pipeline {
                                 $stderrTask = $null
                                 $dockerStdout = ''
                                 $dockerStderr = ''
+                                $stdoutCollected = $false
+                                $stderrCollected = $false
                                 $exceptionMessage = ''
-                                $patBytes = $null
-                                $hashBytes = $null
-                                $sha256 = $null
-                                $fingerprint = $null
                                 $authenticationSucceeded = $false
                                 $cleanupSucceeded = $true
                                 $exitCode = 1
 
                                 try {
+                                    $patPresent = Test-Path Env:DOCKER_PAT
+                                    $patNonEmpty = -not [string]::IsNullOrEmpty($dockerPat)
+                                    $patLengthBeforeTrim = $dockerPat.Length
+                                    $trimmedDockerPat = $dockerPat.Trim()
+                                    $patLengthAfterTrim = $trimmedDockerPat.Length
+                                    $patHasOuterWhitespace = -not [string]::Equals(
+                                        $dockerPat,
+                                        $trimmedDockerPat,
+                                        [StringComparison]::Ordinal
+                                    )
+                                    $patContainsNewline = $dockerPat.IndexOf([char]10) -ge 0
+                                    $patContainsCarriageReturn = $dockerPat.IndexOf([char]13) -ge 0
+                                    $dockerUser = $dockerUser.Trim()
+
+                                    Write-Output "DOCKER_PAT environment variable present: $patPresent"
+                                    Write-Output "DOCKER_PAT value non-empty: $patNonEmpty"
+                                    Write-Output "Effective Docker Hub username: $dockerUser"
+                                    Write-Output "PAT character count before trimming: $patLengthBeforeTrim"
+                                    Write-Output "PAT character count after trimming: $patLengthAfterTrim"
+                                    Write-Output "PAT has leading or trailing whitespace: $patHasOuterWhitespace"
+                                    Write-Output "PAT contains newline: $patContainsNewline"
+                                    Write-Output "PAT contains carriage return: $patContainsCarriageReturn"
+
                                     if ([string]::IsNullOrWhiteSpace($dockerUser) -or
-                                        [string]::IsNullOrWhiteSpace($dockerPat)) {
+                                        [string]::IsNullOrWhiteSpace($trimmedDockerPat)) {
                                         throw 'Docker Hub authentication inputs are empty.'
                                     }
 
-                                    $patBytes = [Text.Encoding]::UTF8.GetBytes($dockerPat)
-                                    try {
-                                        $sha256 = [Security.Cryptography.SHA256]::Create()
-                                        $hashBytes = $sha256.ComputeHash($patBytes)
-                                        $fingerprint = ([BitConverter]::ToString($hashBytes, 0, 6)).Replace('-', '')
-                                        Write-Output "Jenkins credential fingerprint: $fingerprint"
-                                    } finally {
-                                        if ($null -ne $patBytes) {
-                                            [Array]::Clear($patBytes, 0, $patBytes.Length)
-                                        }
-                                        if ($null -ne $hashBytes) {
-                                            [Array]::Clear($hashBytes, 0, $hashBytes.Length)
-                                        }
-                                        if ($null -ne $sha256) {
-                                            $sha256.Dispose()
-                                        }
-                                        $patBytes = $null
-                                        $hashBytes = $null
-                                        $sha256 = $null
-                                        $fingerprint = $null
-                                    }
-
-                                    $dockerUser = $dockerUser.Trim()
-                                    $dockerPat = $dockerPat.Trim()
+                                    $dockerPat = $trimmedDockerPat
                                     $tempDockerConfig = Join-Path ([System.IO.Path]::GetTempPath()) (
                                         'docker-auth-diagnostic-' + [Guid]::NewGuid().ToString('N')
                                     )
@@ -367,18 +367,20 @@ pipeline {
 
                                     $dockerProcess.WaitForExit()
                                     $dockerStdout = [string]$stdoutTask.GetAwaiter().GetResult()
+                                    $stdoutCollected = $true
                                     $dockerStderr = [string]$stderrTask.GetAwaiter().GetResult()
-                                    if (-not [string]::IsNullOrEmpty($dockerPat)) {
-                                        $dockerStdout = $dockerStdout.Replace($dockerPat, '[REDACTED]')
-                                        $dockerStderr = $dockerStderr.Replace($dockerPat, '[REDACTED]')
+                                    $stderrCollected = $true
+                                    if (-not [string]::IsNullOrEmpty($trimmedDockerPat)) {
+                                        $dockerStdout = $dockerStdout.Replace($trimmedDockerPat, '[REDACTED]')
+                                        $dockerStderr = $dockerStderr.Replace($trimmedDockerPat, '[REDACTED]')
                                     }
                                     $exitCode = $dockerProcess.ExitCode
                                     $authenticationSucceeded = ($exitCode -eq 0)
                                 } catch {
                                     $authenticationSucceeded = $false
                                     $exceptionMessage = [string]$_.Exception.Message
-                                    if (-not [string]::IsNullOrEmpty($dockerPat)) {
-                                        $exceptionMessage = $exceptionMessage.Replace($dockerPat, '[REDACTED]')
+                                    if (-not [string]::IsNullOrEmpty($trimmedDockerPat)) {
+                                        $exceptionMessage = $exceptionMessage.Replace($trimmedDockerPat, '[REDACTED]')
                                     }
                                     if ($dockerStarted -and $dockerProcess.HasExited) {
                                         $exitCode = $dockerProcess.ExitCode
@@ -405,20 +407,26 @@ pipeline {
                                     }
                                     if ($null -ne $dockerProcess) {
                                         if ($dockerStarted -and $dockerProcess.HasExited) {
-                                            if ($null -ne $stdoutTask) {
+                                            if ($null -ne $stdoutTask -and -not $stdoutCollected) {
                                                 try {
-                                                    $null = $stdoutTask.GetAwaiter().GetResult()
+                                                    $dockerStdout = [string]$stdoutTask.GetAwaiter().GetResult()
+                                                    $stdoutCollected = $true
                                                 } catch {
                                                     $cleanupSucceeded = $false
                                                 }
                                             }
-                                            if ($null -ne $stderrTask) {
+                                            if ($null -ne $stderrTask -and -not $stderrCollected) {
                                                 try {
-                                                    $null = $stderrTask.GetAwaiter().GetResult()
+                                                    $dockerStderr = [string]$stderrTask.GetAwaiter().GetResult()
+                                                    $stderrCollected = $true
                                                 } catch {
                                                     $cleanupSucceeded = $false
                                                 }
                                             }
+                                        }
+                                        if (-not [string]::IsNullOrEmpty($trimmedDockerPat)) {
+                                            $dockerStdout = $dockerStdout.Replace($trimmedDockerPat, '[REDACTED]')
+                                            $dockerStderr = $dockerStderr.Replace($trimmedDockerPat, '[REDACTED]')
                                         }
                                         try {
                                             $dockerProcess.Dispose()
@@ -426,6 +434,7 @@ pipeline {
                                             $cleanupSucceeded = $false
                                         }
                                     }
+                                    $trimmedDockerPat = $null
 
                                     if ($hadDockerConfig) {
                                         $env:DOCKER_CONFIG = $previousDockerConfig
@@ -466,7 +475,7 @@ pipeline {
                                 $exceptionMessage = $null
                                 $diagnosticText = $null
                                 $dockerPat = $null
-                                Write-Output $diagnosticCategory
+                                Write-Output "$diagnosticCategory (exit code: $exitCode)"
                                 if (-not $authenticationSucceeded) {
                                     exit $exitCode
                                 }
