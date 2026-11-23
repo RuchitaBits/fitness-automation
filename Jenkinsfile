@@ -295,6 +295,10 @@ pipeline {
                                 $dockerStdout = ''
                                 $dockerStderr = ''
                                 $exceptionMessage = ''
+                                $patBytes = $null
+                                $hashBytes = $null
+                                $sha256 = $null
+                                $fingerprint = $null
                                 $authenticationSucceeded = $false
                                 $cleanupSucceeded = $true
                                 $exitCode = 1
@@ -303,6 +307,28 @@ pipeline {
                                     if ([string]::IsNullOrWhiteSpace($dockerUser) -or
                                         [string]::IsNullOrWhiteSpace($dockerPat)) {
                                         throw 'Docker Hub authentication inputs are empty.'
+                                    }
+
+                                    $patBytes = [Text.Encoding]::UTF8.GetBytes($dockerPat)
+                                    try {
+                                        $sha256 = [Security.Cryptography.SHA256]::Create()
+                                        $hashBytes = $sha256.ComputeHash($patBytes)
+                                        $fingerprint = ([BitConverter]::ToString($hashBytes, 0, 6)).Replace('-', '')
+                                        Write-Output "Jenkins credential fingerprint: $fingerprint"
+                                    } finally {
+                                        if ($null -ne $patBytes) {
+                                            [Array]::Clear($patBytes, 0, $patBytes.Length)
+                                        }
+                                        if ($null -ne $hashBytes) {
+                                            [Array]::Clear($hashBytes, 0, $hashBytes.Length)
+                                        }
+                                        if ($null -ne $sha256) {
+                                            $sha256.Dispose()
+                                        }
+                                        $patBytes = $null
+                                        $hashBytes = $null
+                                        $sha256 = $null
+                                        $fingerprint = $null
                                     }
 
                                     $dockerUser = $dockerUser.Trim()
