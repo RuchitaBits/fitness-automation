@@ -15,6 +15,7 @@ pipeline {
         string(name: 'DOCKER_USER', defaultValue: 'ruchitabits', description: 'Docker Hub username')
         booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Push the verified image')
         booleanParam(name: 'DEPLOY_TO_K8S', defaultValue: false, description: 'Deploy after publishing')
+        booleanParam(name: 'DOCKER_AUTH_DIAGNOSTIC', defaultValue: false, description: 'Test Docker Hub authentication only; skip publishing and deployment')
     }
 
     environment {
@@ -228,8 +229,205 @@ pipeline {
             }
         }
 
+        stage('Docker Hub authentication diagnostic') {
+            when { expression { params.DOCKER_AUTH_DIAGNOSTIC } }
+            steps {
+                withCredentials([string(credentialsId: 'dockerhub-pat-working', variable: 'DOCKER_PAT')]) {
+                    script {
+                        if (isUnix()) {
+                            sh '''
+                                set +x
+                                set -eu
+                                dockerExe="${DOCKER_EXE:-docker}"
+                                dockerUser="${DOCKER_USER:-}"
+                                dockerPat="${DOCKER_PAT:-}"
+                                previousDockerConfig="${DOCKER_CONFIG-}"
+                                hadDockerConfig="${DOCKER_CONFIG+x}"
+                                tempDockerConfig=''
+                                loginStatus=1
+
+                                cleanup() {
+                                    unset DOCKER_PAT dockerPat
+                                    if [ "$hadDockerConfig" = "x" ]; then
+                                        DOCKER_CONFIG="$previousDockerConfig"
+                                        export DOCKER_CONFIG
+                                    else
+                                        unset DOCKER_CONFIG
+                                    fi
+                                    if [ -n "$tempDockerConfig" ]; then
+                                        rm -rf -- "$tempDockerConfig" >/dev/null 2>&1 || true
+                                    fi
+                                }
+                                trap cleanup EXIT
+
+                                if [ -n "$dockerUser" ] && [ -n "$dockerPat" ]; then
+                                    tempDockerConfig=$(mktemp -d 2>/dev/null || true)
+                                    if [ -n "$tempDockerConfig" ]; then
+                                        DOCKER_CONFIG="$tempDockerConfig"
+                                        export DOCKER_CONFIG
+                                        unset DOCKER_PAT
+                                        set +e
+                                        printf "%s\n" "$dockerPat" | "$dockerExe" login --username "$dockerUser" --password-stdin >/dev/null 2>&1
+                                        loginStatus=$?
+                                        set -e
+                                    fi
+                                fi
+                                unset dockerPat
+
+                                if [ "$loginStatus" -eq 0 ]; then
+                                    printf 'Docker Hub authentication succeeded (exit code: %s)\n' "$loginStatus"
+                                else
+                                    printf 'Docker Hub authentication failed (exit code: %s)\n' "$loginStatus"
+                                fi
+                                exit "$loginStatus"
+                            '''
+                        } else {
+                            powershell '''
+                                $dockerUser = [string]$env:DOCKER_USER
+                                $dockerPat = [string]$env:DOCKER_PAT
+                                $previousDockerConfig = $env:DOCKER_CONFIG
+                                $hadDockerConfig = Test-Path Env:DOCKER_CONFIG
+                                $tempDockerConfig = $null
+                                $dockerProcess = $null
+                                $dockerStarted = $false
+                                $stdoutTask = $null
+                                $stderrTask = $null
+                                $authenticationSucceeded = $false
+                                $cleanupSucceeded = $true
+                                $exitCode = 1
+
+                                try {
+                                    if ([string]::IsNullOrWhiteSpace($dockerUser) -or
+                                        [string]::IsNullOrWhiteSpace($dockerPat)) {
+                                        throw 'Docker Hub authentication inputs are empty.'
+                                    }
+
+                                    $dockerUser = $dockerUser.Trim()
+                                    $dockerPat = $dockerPat.Trim()
+                                    $tempDockerConfig = Join-Path ([System.IO.Path]::GetTempPath()) (
+                                        'docker-auth-diagnostic-' + [Guid]::NewGuid().ToString('N')
+                                    )
+                                    [System.IO.Directory]::CreateDirectory($tempDockerConfig) | Out-Null
+                                    $env:DOCKER_CONFIG = $tempDockerConfig
+                                    Remove-Item Env:DOCKER_PAT -ErrorAction SilentlyContinue
+
+                                    $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+                                    $processStartInfo.FileName = $env:DOCKER_EXE
+                                    $processStartInfo.Arguments = 'login --username "{0}" --password-stdin' -f $dockerUser
+                                    $processStartInfo.UseShellExecute = $false
+                                    $processStartInfo.RedirectStandardInput = $true
+                                    $processStartInfo.RedirectStandardOutput = $true
+                                    $processStartInfo.RedirectStandardError = $true
+                                    $processStartInfo.CreateNoWindow = $true
+
+                                    $dockerProcess = New-Object System.Diagnostics.Process
+                                    $dockerProcess.StartInfo = $processStartInfo
+                                    if (-not $dockerProcess.Start()) {
+                                        throw 'Docker Hub authentication process did not start.'
+                                    }
+                                    $dockerStarted = $true
+                                    $stdoutTask = $dockerProcess.StandardOutput.ReadToEndAsync()
+                                    $stderrTask = $dockerProcess.StandardError.ReadToEndAsync()
+
+                                    try {
+                                        $dockerProcess.StandardInput.WriteLine($dockerPat)
+                                        $dockerProcess.StandardInput.Flush()
+                                    } finally {
+                                        $dockerPat = $null
+                                        $dockerProcess.StandardInput.Close()
+                                    }
+
+                                    $dockerProcess.WaitForExit()
+                                    $null = $stdoutTask.GetAwaiter().GetResult()
+                                    $null = $stderrTask.GetAwaiter().GetResult()
+                                    $exitCode = $dockerProcess.ExitCode
+                                    $authenticationSucceeded = ($exitCode -eq 0)
+                                } catch {
+                                    $authenticationSucceeded = $false
+                                    if ($dockerStarted -and $dockerProcess.HasExited) {
+                                        $exitCode = $dockerProcess.ExitCode
+                                    } else {
+                                        $exitCode = 1
+                                    }
+                                } finally {
+                                    $dockerPat = $null
+                                    Remove-Item Env:DOCKER_PAT -ErrorAction SilentlyContinue
+
+                                    if ($dockerStarted -and -not $dockerProcess.HasExited) {
+                                        try {
+                                            $dockerProcess.StandardInput.Close()
+                                        } catch {
+                                            $cleanupSucceeded = $false
+                                        }
+                                        try {
+                                            $dockerProcess.Kill()
+                                            $dockerProcess.WaitForExit()
+                                        } catch {
+                                            $cleanupSucceeded = $false
+                                            $exitCode = 1
+                                        }
+                                    }
+                                    if ($null -ne $dockerProcess) {
+                                        if ($dockerStarted -and $dockerProcess.HasExited) {
+                                            if ($null -ne $stdoutTask) {
+                                                try {
+                                                    $null = $stdoutTask.GetAwaiter().GetResult()
+                                                } catch {
+                                                    $cleanupSucceeded = $false
+                                                }
+                                            }
+                                            if ($null -ne $stderrTask) {
+                                                try {
+                                                    $null = $stderrTask.GetAwaiter().GetResult()
+                                                } catch {
+                                                    $cleanupSucceeded = $false
+                                                }
+                                            }
+                                        }
+                                        try {
+                                            $dockerProcess.Dispose()
+                                        } catch {
+                                            $cleanupSucceeded = $false
+                                        }
+                                    }
+
+                                    if ($hadDockerConfig) {
+                                        $env:DOCKER_CONFIG = $previousDockerConfig
+                                    } else {
+                                        Remove-Item Env:DOCKER_CONFIG -ErrorAction SilentlyContinue
+                                    }
+                                    if ($null -ne $tempDockerConfig -and
+                                        (Test-Path -LiteralPath $tempDockerConfig)) {
+                                        try {
+                                            Remove-Item -LiteralPath $tempDockerConfig -Recurse -Force -ErrorAction Stop
+                                        } catch {
+                                            $cleanupSucceeded = $false
+                                            $exitCode = 1
+                                        }
+                                    }
+                                }
+
+                                if (-not $cleanupSucceeded) {
+                                    $authenticationSucceeded = $false
+                                }
+                                if (-not $authenticationSucceeded -and $exitCode -eq 0) {
+                                    $exitCode = 1
+                                }
+                                if ($authenticationSucceeded) {
+                                    Write-Output "Docker Hub authentication succeeded (exit code: $exitCode)."
+                                } else {
+                                    Write-Output "Docker Hub authentication failed (exit code: $exitCode)."
+                                    exit $exitCode
+                                }
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Docker Hub authentication') {
-            when { expression { params.PUBLISH_IMAGE } }
+            when { expression { params.PUBLISH_IMAGE && !params.DOCKER_AUTH_DIAGNOSTIC } }
             steps {
                 script {
                     if (!env.IMAGE_REPO?.trim()) {
@@ -347,7 +545,7 @@ pipeline {
         }
 
         stage('Docker image tagging and publishing') {
-            when { expression { params.PUBLISH_IMAGE } }
+            when { expression { params.PUBLISH_IMAGE && !params.DOCKER_AUTH_DIAGNOSTIC } }
             steps {
                 script {
                     if (isUnix()) {
@@ -376,7 +574,7 @@ pipeline {
         }
 
         stage('Kubernetes deployment') {
-            when { expression { params.DEPLOY_TO_K8S } }
+            when { expression { params.DEPLOY_TO_K8S && !params.DOCKER_AUTH_DIAGNOSTIC } }
             steps {
                 script {
                     if (!params.PUBLISH_IMAGE) {
@@ -422,7 +620,7 @@ pipeline {
         }
 
         stage('Deployment verification') {
-            when { expression { params.DEPLOY_TO_K8S } }
+            when { expression { params.DEPLOY_TO_K8S && !params.DOCKER_AUTH_DIAGNOSTIC } }
             steps {
                 withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
                     bat '''
